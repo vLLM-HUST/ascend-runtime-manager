@@ -30,10 +30,10 @@ DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
 
 
 def test_build_official_image_uses_expected_suffixes():
-    assert build_official_image("910b", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.9.1-dev"
-    assert build_official_image("910b", "openeuler") == "quay.io/ascend/vllm-ascend:v0.9.1-dev-openeuler"
-    assert build_official_image("a3", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.9.1-dev-a3"
-    assert build_official_image("a3", "openeuler") == "quay.io/ascend/vllm-ascend:v0.9.1-dev-a3-openeuler"
+    assert build_official_image("910b", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.17.0rc1"
+    assert build_official_image("910b", "openeuler") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-openeuler"
+    assert build_official_image("a3", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3"
+    assert build_official_image("a3", "openeuler") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
 
 
 def test_resolve_container_image_prefers_explicit_override():
@@ -47,7 +47,7 @@ def test_resolve_container_image_noninteractive_uses_detected_variant():
     ):
         image = resolve_container_image(None, non_interactive=True)
 
-    assert image == "quay.io/ascend/vllm-ascend:v0.9.1-dev-a3-openeuler"
+    assert image == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
 
 
 def test_resolve_container_image_interactively_accepts_detected_defaults():
@@ -59,7 +59,7 @@ def test_resolve_container_image_interactively_accepts_detected_defaults():
     ):
         image = resolve_container_image(None, non_interactive=False)
 
-    assert image == "quay.io/ascend/vllm-ascend:v0.9.1-dev-a3-openeuler"
+    assert image == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
 
 
 def test_resolve_container_image_noninteractive_falls_back_to_default_when_detection_missing():

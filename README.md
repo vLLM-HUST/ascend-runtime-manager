@@ -101,9 +101,9 @@ model/runtime combinations. To opt out, pass `--no-prefill-compat-mode`.
 workflow. `container install` is the one-click path: it pulls the configured
 image when needed, mounts Ascend devices and driver paths from the host, mounts
 your workspace into `/workspace`, and creates or starts a persistent container.
-When `--image` is omitted, the manager now defaults to the `v0.9.1-dev` image
+When `--image` is omitted, the manager now defaults to the `v0.17.0rc1` image
 family, probes the host for an A2/910B vs A3 recommendation, and interactively
-confirms the official variant (`v0.9.1-dev`, `-a3`, `-openeuler`, or
+confirms the official variant (`v0.17.0rc1`, `-a3`, `-openeuler`, or
 `-a3-openeuler`). Use `--non-interactive` to skip prompts in automation.
 Use `container shell` to enter that environment later without rebuilding the
 mount list, and `container exec -- ...` to run one-off checks or launches.
