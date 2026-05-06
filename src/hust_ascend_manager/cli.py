@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_runtime.add_argument("--python", dest="python_bin", default=None, help="Python interpreter to use")
     p_runtime.add_argument("--json", action="store_true", help="Output check result as JSON")
     p_runtime.add_argument("--require-plugin", action="store_true", help="Require the Ascend platform plugin to be installed during runtime check")
+    p_runtime.add_argument(
+        "--require-npu",
+        action="store_true",
+        help="Require torch_npu to report at least one visible Ascend device during runtime check",
+    )
     p_runtime.add_argument("--skip-torch-install", action="store_true", help="Skip torch reinstall during repair")
     p_runtime.add_argument("--skip-build-deps", action="store_true", help="Skip requirements/build.txt during repair")
     p_runtime.add_argument("--skip-rebuild", action="store_true", help="Skip editable reinstall during repair")
@@ -180,6 +185,7 @@ def main() -> int:
                 args.python_bin,
                 json_output=bool(args.json),
                 require_plugin=bool(args.require_plugin),
+                require_npu=bool(args.require_npu),
             )
         return repair_vllm_runtime(
             args.repo,

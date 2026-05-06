@@ -5,6 +5,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -113,8 +114,82 @@ def _import_check(python_bin: str, repo_dir: Path, library_path: str | None) -> 
     )
 
 
+def _torch_npu_runtime_probe(
+    python_bin: str,
+    repo_dir: Path,
+    library_path: str | None,
+) -> dict[str, Any]:
+    env = _runtime_env(repo_dir, python_bin, library_path)
+    probe = subprocess.run(
+        [
+            python_bin,
+            "-c",
+            (
+                "import json\n"
+                "try:\n"
+                "    import torch\n"
+                "    import torch_npu  # noqa: F401\n"
+                "except Exception as exc:\n"
+                "    print(json.dumps({'torch_npu_import_ok': False, 'npu_available': False, 'device_count': None, 'error': repr(exc)}))\n"
+                "    raise SystemExit(0)\n"
+                "payload = {'torch_npu_import_ok': True, 'npu_available': False, 'device_count': None, 'error': None}\n"
+                "try:\n"
+                "    payload['npu_available'] = bool(torch.npu.is_available())\n"
+                "    payload['device_count'] = int(torch.npu.device_count())\n"
+                "except Exception as exc:\n"
+                "    payload['error'] = repr(exc)\n"
+                "print(json.dumps(payload))\n"
+            ),
+        ],
+        cwd=str(repo_dir),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    raw_output = probe.stdout.strip() or probe.stderr.strip()
+    if probe.returncode != 0:
+        return {
+            "torch_npu_import_ok": False,
+            "npu_available": False,
+            "device_count": None,
+            "error": raw_output or f"probe exited with code {probe.returncode}",
+        }
+
+    if not raw_output:
+        return {
+            "torch_npu_import_ok": False,
+            "npu_available": False,
+            "device_count": None,
+            "error": "torch_npu probe produced no output",
+        }
+
+    for line in reversed(raw_output.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        return {
+            "torch_npu_import_ok": bool(payload.get("torch_npu_import_ok")),
+            "npu_available": bool(payload.get("npu_available")),
+            "device_count": payload.get("device_count"),
+            "error": payload.get("error"),
+        }
+
+    return {
+        "torch_npu_import_ok": False,
+        "npu_available": False,
+        "device_count": None,
+        "error": raw_output,
+    }
+
+
 def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, Any]:
     check = _import_check(python_bin, repo_dir, library_path)
+    torch_npu_probe = _torch_npu_runtime_probe(python_bin, repo_dir, library_path)
     return {
         "repo_dir": str(repo_dir),
         "python_bin": python_bin,
@@ -131,6 +206,7 @@ def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -
             "vllm-ascend": _package_version(python_bin, repo_dir, library_path, "vllm-ascend"),
         },
         "ascend_plugin_ok": _check_ascend_platform_plugin(python_bin, repo_dir, library_path),
+        "torch_npu_probe": torch_npu_probe,
         "import_ok": check.returncode == 0,
         "import_stderr": check.stderr.strip() or None,
     }
@@ -150,6 +226,12 @@ def _print_report(report: dict[str, Any], json_output: bool) -> None:
     for key, value in report["packages"].items():
         print(f"{key}={value or '<missing>'}")
     print(f"ascend_plugin_ok={str(report['ascend_plugin_ok']).lower()}")
+    probe = report["torch_npu_probe"]
+    print(f"torch_npu_import_ok={str(probe['torch_npu_import_ok']).lower()}")
+    print(f"npu_available={str(probe['npu_available']).lower()}")
+    print(f"npu_device_count={probe['device_count'] if probe['device_count'] is not None else '<unknown>'}")
+    if probe["error"]:
+        print(f"npu_probe_error={probe['error']}")
     print(f"import_ok={str(report['import_ok']).lower()}")
     if report["import_stderr"]:
         print(report["import_stderr"])
@@ -160,6 +242,7 @@ def check_vllm_runtime(
     python_bin: str | None,
     json_output: bool = False,
     require_plugin: bool = False,
+    require_npu: bool = False,
 ) -> int:
     resolved_repo = _resolve_repo_dir(repo_dir)
     resolved_python = _resolve_python_bin(python_bin)
@@ -167,7 +250,15 @@ def check_vllm_runtime(
     report = _runtime_report(resolved_repo, resolved_python, library_path)
     _print_report(report, json_output=json_output)
     plugin_ok = report["ascend_plugin_ok"] or not require_plugin
-    return 0 if report["import_ok"] and plugin_ok else 1
+    probe = report["torch_npu_probe"]
+    npu_ok = (
+        probe["torch_npu_import_ok"]
+        and probe["npu_available"]
+        and isinstance(probe["device_count"], int)
+        and probe["device_count"] > 0
+        and not probe["error"]
+    ) or not require_npu
+    return 0 if report["import_ok"] and plugin_ok and npu_ok else 1
 
 
 def _find_local_plugin_repo(repo_dir: Path) -> Path | None:
@@ -365,4 +456,5 @@ def repair_vllm_runtime(
         resolved_python,
         json_output=False,
         require_plugin=install_plugin,
+        require_npu=False,
     )

@@ -45,6 +45,12 @@ def test_check_vllm_runtime_returns_failure_when_import_fails(tmp_path: Path, ca
             "vllm-ascend": None,
         },
         "ascend_plugin_ok": False,
+        "torch_npu_probe": {
+            "torch_npu_import_ok": False,
+            "npu_available": False,
+            "device_count": None,
+            "error": "ImportError('torch_npu missing')",
+        },
         "import_ok": False,
         "import_stderr": "ModuleNotFoundError: No module named transformers",
     }
@@ -96,6 +102,12 @@ def test_check_vllm_runtime_can_require_plugin(tmp_path: Path):
             "vllm-ascend": None,
         },
         "ascend_plugin_ok": False,
+        "torch_npu_probe": {
+            "torch_npu_import_ok": True,
+            "npu_available": True,
+            "device_count": 1,
+            "error": None,
+        },
         "import_ok": True,
         "import_stderr": None,
     }
@@ -108,6 +120,79 @@ def test_check_vllm_runtime_can_require_plugin(tmp_path: Path):
         rc = runtime.check_vllm_runtime(str(tmp_path), None, require_plugin=True)
 
     assert rc == 1
+
+
+def test_check_vllm_runtime_can_require_npu(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='vllm-hust'\n", encoding="utf-8")
+    (tmp_path / "requirements").mkdir()
+    (tmp_path / "requirements/common.txt").write_text("transformers\n", encoding="utf-8")
+
+    fake_report = {
+        "repo_dir": str(tmp_path),
+        "python_bin": "/usr/bin/python3",
+        "python_prefix": "/usr",
+        "python_library_path": "/usr/lib",
+        "expected_torch_version": "2.10.0",
+        "packages": {
+            "torch": "2.10.0",
+            "transformers": "4.57.0",
+            "tokenizers": "0.22.0",
+            "huggingface_hub": "0.36.0",
+            "cmake": "3.30.0",
+            "vllm-ascend-hust": "0.1.0",
+            "vllm-ascend": None,
+        },
+        "ascend_plugin_ok": True,
+        "torch_npu_probe": {
+            "torch_npu_import_ok": True,
+            "npu_available": False,
+            "device_count": None,
+            "error": "RuntimeError('drvRet=87')",
+        },
+        "import_ok": True,
+        "import_stderr": None,
+    }
+
+    with (
+        patch("hust_ascend_manager.runtime._resolve_python_bin", return_value="/usr/bin/python3"),
+        patch("hust_ascend_manager.runtime._python_library_path", return_value="/usr/lib"),
+        patch("hust_ascend_manager.runtime._runtime_report", return_value=fake_report),
+    ):
+        rc = runtime.check_vllm_runtime(str(tmp_path), None, require_npu=True)
+
+    assert rc == 1
+
+
+def test_torch_npu_runtime_probe_parses_json_payload(tmp_path: Path):
+    payload = '{"torch_npu_import_ok": true, "npu_available": true, "device_count": 8, "error": null}\n'
+
+    class Result:
+        returncode = 0
+        stdout = payload
+        stderr = ""
+
+    with patch("hust_ascend_manager.runtime.subprocess.run", return_value=Result()):
+        probe = runtime._torch_npu_runtime_probe("/usr/bin/python3", tmp_path, "/usr/lib")
+
+    assert probe == {
+        "torch_npu_import_ok": True,
+        "npu_available": True,
+        "device_count": 8,
+        "error": None,
+    }
+
+
+def test_torch_npu_runtime_probe_surfaces_empty_output(tmp_path: Path):
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    with patch("hust_ascend_manager.runtime.subprocess.run", return_value=Result()):
+        probe = runtime._torch_npu_runtime_probe("/usr/bin/python3", tmp_path, "/usr/lib")
+
+    assert probe["torch_npu_import_ok"] is False
+    assert probe["error"] == "torch_npu probe produced no output"
 
 
 def test_find_local_plugin_repo_prefers_workspace_sibling(tmp_path: Path):
