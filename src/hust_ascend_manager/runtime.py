@@ -18,6 +18,7 @@ from .setup import _build_pip_install_env
 DEFAULT_ASCEND_PLUGIN_PACKAGE = "vllm-ascend-hust"
 LOCAL_ASCEND_PLUGIN_REPOS = ("vllm-ascend-hust", "vllm-ascend")
 HUGGINGFACE_HUB_SPEC = "huggingface_hub>=0.36.0,<1.0"
+EXPECTED_VLLM_DISTRIBUTION = "vllm-hust"
 
 
 def _resolve_repo_dir(repo_dir: str | None) -> Path:
@@ -114,6 +115,59 @@ def _import_check(python_bin: str, repo_dir: Path, library_path: str | None) -> 
     )
 
 
+def _provider_helper_path(repo_dir: Path) -> Path:
+    return repo_dir / "scripts/ensure_vllm_provider.py"
+
+
+def _provider_check_cmd(
+    python_bin: str,
+    repo_dir: Path,
+    *,
+    remove_conflicts: bool,
+) -> list[str]:
+    helper_path = _provider_helper_path(repo_dir)
+    if not helper_path.exists():
+        raise FileNotFoundError(
+            f"Missing provider validation helper: {helper_path}. Update the target vllm-hust checkout first."
+        )
+
+    cmd = [
+        python_bin,
+        str(helper_path),
+        "--expected-distribution",
+        EXPECTED_VLLM_DISTRIBUTION,
+    ]
+    if remove_conflicts:
+        cmd.append("--remove-conflicts")
+    return cmd
+
+
+def _provider_check(
+    python_bin: str,
+    repo_dir: Path,
+    library_path: str | None,
+    *,
+    remove_conflicts: bool,
+) -> subprocess.CompletedProcess[str]:
+    env = _runtime_env(repo_dir, python_bin, library_path)
+    return _run(
+        _provider_check_cmd(
+            python_bin,
+            repo_dir,
+            remove_conflicts=remove_conflicts,
+        ),
+        cwd=repo_dir,
+        env=env,
+    )
+
+
+def _provider_import_path(provider_stdout: str) -> str | None:
+    for line in provider_stdout.splitlines():
+        if line.startswith("import_path="):
+            return line.split("=", 1)[1].strip() or None
+    return None
+
+
 def _torch_npu_runtime_probe(
     python_bin: str,
     repo_dir: Path,
@@ -189,6 +243,12 @@ def _torch_npu_runtime_probe(
 
 def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, Any]:
     check = _import_check(python_bin, repo_dir, library_path)
+    provider_check = _provider_check(
+        python_bin,
+        repo_dir,
+        library_path,
+        remove_conflicts=False,
+    )
     torch_npu_probe = _torch_npu_runtime_probe(python_bin, repo_dir, library_path)
     return {
         "repo_dir": str(repo_dir),
@@ -206,6 +266,9 @@ def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -
             "vllm-ascend": _package_version(python_bin, repo_dir, library_path, "vllm-ascend"),
         },
         "ascend_plugin_ok": _check_ascend_platform_plugin(python_bin, repo_dir, library_path),
+        "provider_check_ok": provider_check.returncode == 0,
+        "provider_import_path": _provider_import_path(provider_check.stdout),
+        "provider_stderr": provider_check.stderr.strip() or None,
         "torch_npu_probe": torch_npu_probe,
         "import_ok": check.returncode == 0,
         "import_stderr": check.stderr.strip() or None,
@@ -226,6 +289,12 @@ def _print_report(report: dict[str, Any], json_output: bool) -> None:
     for key, value in report["packages"].items():
         print(f"{key}={value or '<missing>'}")
     print(f"ascend_plugin_ok={str(report['ascend_plugin_ok']).lower()}")
+    print(f"provider_check_ok={str(report.get('provider_check_ok', True)).lower()}")
+    provider_import_path = report.get("provider_import_path")
+    if provider_import_path:
+        print(f"provider_import_path={provider_import_path}")
+    if report.get("provider_stderr"):
+        print(report["provider_stderr"])
     probe = report["torch_npu_probe"]
     print(f"torch_npu_import_ok={str(probe['torch_npu_import_ok']).lower()}")
     print(f"npu_available={str(probe['npu_available']).lower()}")
@@ -250,6 +319,7 @@ def check_vllm_runtime(
     report = _runtime_report(resolved_repo, resolved_python, library_path)
     _print_report(report, json_output=json_output)
     plugin_ok = report["ascend_plugin_ok"] or not require_plugin
+    provider_ok = bool(report.get("provider_check_ok", True))
     probe = report["torch_npu_probe"]
     npu_ok = (
         probe["torch_npu_import_ok"]
@@ -258,7 +328,7 @@ def check_vllm_runtime(
         and probe["device_count"] > 0
         and not probe["error"]
     ) or not require_npu
-    return 0 if report["import_ok"] and plugin_ok and npu_ok else 1
+    return 0 if report["import_ok"] and plugin_ok and provider_ok and npu_ok else 1
 
 
 def _find_local_plugin_repo(repo_dir: Path) -> Path | None:
@@ -450,6 +520,17 @@ def repair_vllm_runtime(
             plugin_package=plugin_package,
         )
         _verify_ascend_plugin(resolved_python, resolved_repo, library_path)
+
+    subprocess.run(
+        _provider_check_cmd(
+            resolved_python,
+            resolved_repo,
+            remove_conflicts=True,
+        ),
+        cwd=str(resolved_repo),
+        env=env,
+        check=True,
+    )
 
     return check_vllm_runtime(
         str(resolved_repo),

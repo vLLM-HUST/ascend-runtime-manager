@@ -45,6 +45,9 @@ def test_check_vllm_runtime_returns_failure_when_import_fails(tmp_path: Path, ca
             "vllm-ascend": None,
         },
         "ascend_plugin_ok": False,
+        "provider_check_ok": True,
+        "provider_import_path": str(tmp_path / "vllm" / "__init__.py"),
+        "provider_stderr": None,
         "torch_npu_probe": {
             "torch_npu_import_ok": False,
             "npu_available": False,
@@ -102,6 +105,9 @@ def test_check_vllm_runtime_can_require_plugin(tmp_path: Path):
             "vllm-ascend": None,
         },
         "ascend_plugin_ok": False,
+        "provider_check_ok": True,
+        "provider_import_path": str(tmp_path / "vllm" / "__init__.py"),
+        "provider_stderr": None,
         "torch_npu_probe": {
             "torch_npu_import_ok": True,
             "npu_available": True,
@@ -143,6 +149,9 @@ def test_check_vllm_runtime_can_require_npu(tmp_path: Path):
             "vllm-ascend": None,
         },
         "ascend_plugin_ok": True,
+        "provider_check_ok": True,
+        "provider_import_path": str(tmp_path / "vllm" / "__init__.py"),
+        "provider_stderr": None,
         "torch_npu_probe": {
             "torch_npu_import_ok": True,
             "npu_available": False,
@@ -208,11 +217,57 @@ def test_find_local_plugin_repo_prefers_workspace_sibling(tmp_path: Path):
     assert runtime._find_local_plugin_repo(runtime_repo) == plugin_repo
 
 
+def test_check_vllm_runtime_returns_failure_when_provider_check_fails(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='vllm-hust'\n", encoding="utf-8")
+    (tmp_path / "requirements").mkdir()
+    (tmp_path / "requirements/common.txt").write_text("transformers\n", encoding="utf-8")
+
+    fake_report = {
+        "repo_dir": str(tmp_path),
+        "python_bin": "/usr/bin/python3",
+        "python_prefix": "/usr",
+        "python_library_path": "/usr/lib",
+        "expected_torch_version": "2.10.0",
+        "packages": {
+            "torch": "2.10.0",
+            "transformers": "4.57.0",
+            "tokenizers": "0.22.0",
+            "huggingface_hub": "0.36.0",
+            "cmake": "3.30.0",
+            "vllm-ascend-hust": "0.1.0",
+            "vllm-ascend": None,
+        },
+        "ascend_plugin_ok": True,
+        "provider_check_ok": False,
+        "provider_import_path": None,
+        "provider_stderr": "Conflicting distributions still provide top-level 'vllm'",
+        "torch_npu_probe": {
+            "torch_npu_import_ok": True,
+            "npu_available": True,
+            "device_count": 1,
+            "error": None,
+        },
+        "import_ok": True,
+        "import_stderr": None,
+    }
+
+    with (
+        patch("hust_ascend_manager.runtime._resolve_python_bin", return_value="/usr/bin/python3"),
+        patch("hust_ascend_manager.runtime._python_library_path", return_value="/usr/lib"),
+        patch("hust_ascend_manager.runtime._runtime_report", return_value=fake_report),
+    ):
+        rc = runtime.check_vllm_runtime(str(tmp_path), None)
+
+    assert rc == 1
+
+
 def test_repair_vllm_runtime_runs_expected_steps(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='vllm-hust'\n", encoding="utf-8")
     (tmp_path / "requirements").mkdir()
     (tmp_path / "requirements/common.txt").write_text("transformers\n", encoding="utf-8")
     (tmp_path / "requirements/build.txt").write_text("cmake>=3.26.1\ntorch==2.10.0\n", encoding="utf-8")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/ensure_vllm_provider.py").write_text("print('ok')\n", encoding="utf-8")
     (tmp_path / "vllm").mkdir()
     (tmp_path / "vllm/_C.abi3.so").write_text("binary", encoding="utf-8")
     (tmp_path / "build").mkdir()
@@ -259,6 +314,15 @@ def test_repair_vllm_runtime_runs_expected_steps(tmp_path: Path):
         ]
         for cmd in commands
     )
+    assert any(
+        cmd[:4] == [
+            "/usr/bin/python3",
+            str(tmp_path / "scripts/ensure_vllm_provider.py"),
+            "--expected-distribution",
+            runtime.EXPECTED_VLLM_DISTRIBUTION,
+        ] and "--remove-conflicts" in cmd
+        for cmd in commands
+    )
     assert any(cmd[:7] == ["/usr/bin/python3", "-m", "pip", "install", "-e", str(tmp_path), "--no-build-isolation"] for cmd in commands)
     assert not (tmp_path / "vllm/_C.abi3.so").exists()
     assert not (tmp_path / "build").exists()
@@ -269,6 +333,8 @@ def test_repair_vllm_runtime_installs_plugin_when_requested(tmp_path: Path):
     (tmp_path / "requirements").mkdir()
     (tmp_path / "requirements/common.txt").write_text("transformers\n", encoding="utf-8")
     (tmp_path / "requirements/build.txt").write_text("cmake>=3.26.1\ntorch==2.10.0\n", encoding="utf-8")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/ensure_vllm_provider.py").write_text("print('ok')\n", encoding="utf-8")
     (tmp_path / "vllm").mkdir()
     plugin_repo = tmp_path.parent / "vllm-ascend-hust"
     plugin_repo.mkdir()

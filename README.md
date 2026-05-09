@@ -55,6 +55,10 @@ It checks whether the active Python can import `torch`, `transformers`,
 runtime deps, force-reinstalls the Hugging Face stack, installs build deps from
 `requirements/build.txt` without replacing the active torch wheel twice, and
 rebuilds editable `vllm-hust` against the currently selected Python runtime.
+After the editable reinstall, it also runs the repo-local provider helper so
+the active environment keeps exactly one installed distribution providing the
+top-level `vllm` package, instead of silently importing a stale plain `vllm`
+wheel beside `vllm-hust`.
 When you pass `--install-plugin`, the same command also installs and verifies
 the Ascend platform plugin. It prefers a sibling local repo such as
 `vllm-ascend-hust` or `vllm-ascend` when present, and falls back to the PyPI
@@ -66,6 +70,7 @@ What `runtime repair` covers:
 - mismatched `transformers` / `tokenizers` / `huggingface_hub` installs
 - missing build tools from `requirements/build.txt` such as `cmake` and `ninja`
 - stale local `vllm/*.so` artifacts that need an editable reinstall against the current torch wheel
+- conflicting top-level `vllm` providers such as a leftover plain `vllm` wheel beside editable `vllm-hust`
 - optional Ascend platform plugin install and entry-point verification via `--install-plugin`
 
 What still remains machine-specific or manual:
