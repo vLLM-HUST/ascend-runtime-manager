@@ -153,6 +153,70 @@ def test_build_env_dict_augments_active_vendor_ld_when_hccl_is_missing(monkeypat
     assert str(root / "runtime/lib64") in env["LD_LIBRARY_PATH"].split(":")
 
 
+def test_detect_runtime_version_falls_back_to_cann_path_name(tmp_path: Path):
+    root = tmp_path / "cann-8.5.1"
+    root.mkdir(parents=True)
+
+    assert doctor._detect_runtime_version(str(root)) == "8.5.1"
+
+
+def test_build_env_dict_detects_runtime_version_from_cann_path_name(tmp_path: Path):
+    root = tmp_path / "cann-8.5.1"
+    (root / "runtime/lib64").mkdir(parents=True)
+    hccl_lib = root / "runtime/lib64/libhccl.so"
+    hccl_lib.write_text("")
+
+    with (
+        patch("hust_ascend_manager.doctor._find_hccl", return_value=str(hccl_lib)),
+        patch("hust_ascend_manager.doctor._ascend_has_stream_attr", return_value=True),
+        patch("hust_ascend_manager.doctor._find_atb_lib_dir", return_value=None),
+        patch("hust_ascend_manager.doctor._detect_broken_legacy_kernel_layout", return_value=None),
+    ):
+        env = doctor.build_env_dict(ascend_root=str(root))
+
+    assert env["HUST_ASCEND_RUNTIME_VERSION"] == "8.5.1"
+
+
+def test_build_env_dict_falls_back_to_ascend_visible_devices_when_rt_visible_is_empty(monkeypatch, tmp_path: Path):
+    root = tmp_path / "cann-8.5.1"
+    (root / "runtime/lib64").mkdir(parents=True)
+    hccl_lib = root / "runtime/lib64/libhccl.so"
+    hccl_lib.write_text("")
+
+    monkeypatch.setenv("ASCEND_VISIBLE_DEVICES", " 0, 2 ")
+    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", " , ")
+
+    with (
+        patch("hust_ascend_manager.doctor._find_hccl", return_value=str(hccl_lib)),
+        patch("hust_ascend_manager.doctor._ascend_has_stream_attr", return_value=True),
+        patch("hust_ascend_manager.doctor._find_atb_lib_dir", return_value=None),
+        patch("hust_ascend_manager.doctor._detect_broken_legacy_kernel_layout", return_value=None),
+    ):
+        env = doctor.build_env_dict(ascend_root=str(root))
+
+    assert env["ASCEND_RT_VISIBLE_DEVICES"] == "0,2"
+
+
+def test_build_env_dict_prefers_explicit_rt_visible_devices(monkeypatch, tmp_path: Path):
+    root = tmp_path / "cann-8.5.1"
+    (root / "runtime/lib64").mkdir(parents=True)
+    hccl_lib = root / "runtime/lib64/libhccl.so"
+    hccl_lib.write_text("")
+
+    monkeypatch.setenv("ASCEND_VISIBLE_DEVICES", "0,2")
+    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", " 3, 5 ")
+
+    with (
+        patch("hust_ascend_manager.doctor._find_hccl", return_value=str(hccl_lib)),
+        patch("hust_ascend_manager.doctor._ascend_has_stream_attr", return_value=True),
+        patch("hust_ascend_manager.doctor._find_atb_lib_dir", return_value=None),
+        patch("hust_ascend_manager.doctor._detect_broken_legacy_kernel_layout", return_value=None),
+    ):
+        env = doctor.build_env_dict(ascend_root=str(root))
+
+    assert env["ASCEND_RT_VISIBLE_DEVICES"] == "3,5"
+
+
 def test_install_conda_env_hook_writes_activate_and_deactivate_scripts(tmp_path: Path):
     conda_prefix = tmp_path / "conda-env"
     (conda_prefix / "conda-meta").mkdir(parents=True)

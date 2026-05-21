@@ -84,6 +84,21 @@ def test_runtime_env_prefers_manager_exports(tmp_path: Path):
     assert merged["LD_LIBRARY_PATH"].startswith("/usr/lib:/usr/local/Ascend/cann-9.0.0-beta.1/runtime/lib64")
 
 
+def test_runtime_env_drops_empty_rt_visible_devices(tmp_path: Path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='vllm-hust'\n", encoding="utf-8")
+    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", " , ")
+
+    env = {
+        "ASCEND_HOME_PATH": "/usr/local/Ascend/cann-9.0.0-beta.1",
+        "LD_LIBRARY_PATH": "/usr/local/Ascend/cann-9.0.0-beta.1/runtime/lib64",
+    }
+
+    with patch("hust_ascend_manager.runtime.build_env_dict", return_value=env):
+        merged = runtime._runtime_env(tmp_path, "/usr/bin/python3", "/usr/lib")
+
+    assert "ASCEND_RT_VISIBLE_DEVICES" not in merged
+
+
 def test_check_vllm_runtime_can_require_plugin(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='vllm-hust'\n", encoding="utf-8")
     (tmp_path / "requirements").mkdir()
