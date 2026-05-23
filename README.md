@@ -47,6 +47,13 @@ reapplies the manager-generated Ascend environment automatically, so bare
 commands like `python -c 'import torch_npu'` or `vllm --help` do not depend on
 manual `source set_env.sh` or ad hoc shell wrappers.
 
+Manager-generated runtime exports also normalize device visibility filters.
+Empty or whitespace-only `ASCEND_RT_VISIBLE_DEVICES` values are dropped instead
+of being forwarded to child processes, and when only
+`ASCEND_VISIBLE_DEVICES` is set the manager derives a normalized
+`ASCEND_RT_VISIBLE_DEVICES` from it so `env --shell`, `doctor`, and `runtime`
+use the same effective device filter.
+
 `runtime` is the source of truth for repairing a broken `vllm-hust` Python
 environment from adjacent runtime repos such as `vllm-hust-workstation`.
 It checks whether the active Python can import `torch`, `transformers`,
@@ -86,6 +93,10 @@ host only has directories like `/usr/local/Ascend/ascend-toolkit.bak.8.1/latest`
 instead of the canonical `/usr/local/Ascend/ascend-toolkit/latest` symlink.
 `doctor` verifies whether `torch_npu` can be imported under the manager-generated
 environment, and `launch` always runs with that normalized environment.
+When the canonical `runtime/version.info` files are missing, `doctor` also
+falls back to non-standard toolkit path names such as `cann-8.5.1/` or
+`ascend-toolkit.bak.8.5.1/` so `HUST_ASCEND_RUNTIME_VERSION` stays populated in
+reports from partially normalized hosts.
 `doctor` also detects a broken host OPP legacy-kernel layout where
 `kernel/config/ascend910_93/ops_legacy/*.json` points at
 `kernel/ascend910_93/<op>/...` but the installed files only exist under
