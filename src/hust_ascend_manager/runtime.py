@@ -70,6 +70,17 @@ def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> d
     env["PYTHONPATH"] = str(repo_dir) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
     if library_path:
         env["LD_LIBRARY_PATH"] = library_path + (f":{env['LD_LIBRARY_PATH']}" if env.get("LD_LIBRARY_PATH") else "")
+
+    runtime_visible_devices = env.get("ASCEND_RT_VISIBLE_DEVICES")
+    if runtime_visible_devices:
+        runtime_visible_devices = ",".join(
+            item.strip() for item in runtime_visible_devices.split(",") if item.strip()
+        )
+    if runtime_visible_devices:
+        env["ASCEND_RT_VISIBLE_DEVICES"] = runtime_visible_devices
+    else:
+        env.pop("ASCEND_RT_VISIBLE_DEVICES", None)
+
     env["VLLM_HUST_PYTHON_BIN"] = python_bin
     return env
 

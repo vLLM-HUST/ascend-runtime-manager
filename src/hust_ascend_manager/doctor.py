@@ -15,6 +15,7 @@ _ASCEND_ENV_EXPORT_KEYS = (
     "ASCEND_HOME_PATH",
     "ASCEND_OPP_PATH",
     "ASCEND_AICPU_PATH",
+    "ASCEND_RT_VISIBLE_DEVICES",
     "TORCH_DEVICE_BACKEND_AUTOLOAD",
     "HUST_ASCEND_RUNTIME_VERSION",
     "HUST_ASCEND_HAS_STREAM_ATTR",
@@ -372,6 +373,38 @@ def _find_atb_set_env(root: str | None = None) -> str | None:
     return None
 
 
+def _detect_runtime_version(root: str | None) -> str | None:
+    if not root:
+        return None
+
+    root_path = Path(root).resolve()
+    version_files = [
+        root_path / "runtime/version.info",
+        root_path / "compiler/version.info",
+        root_path / "opp/version.info",
+        root_path / "version.info",
+        root_path.parent / "version.info",
+    ]
+    for version_file in version_files:
+        if not version_file.exists():
+            continue
+        raw = version_file.read_text(encoding="utf-8", errors="ignore")
+        match = re.search(r"([0-9]+(?:\.[0-9A-Za-z]+)+)", raw)
+        if match:
+            return match.group(1)
+
+    for candidate in (root_path, *root_path.parents):
+        match = re.search(r"(?:^|[^0-9A-Za-z])cann[-_]?([0-9]+(?:\.[0-9A-Za-z]+)+)", candidate.name, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+        match = re.search(r"ascend-toolkit(?:\.bak)?\.([0-9]+(?:\.[0-9A-Za-z]+)+)", candidate.name, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+    return None
+
+
 def _sanitize_ld_path(old_ld: str) -> str:
     kept: list[str] = []
     for item in old_ld.split(":"):
@@ -381,6 +414,24 @@ def _sanitize_ld_path(old_ld: str) -> str:
             continue
         kept.append(item)
     return ":".join(kept)
+
+
+def _normalize_visible_devices(raw_value: str | None) -> str | None:
+    if raw_value is None:
+        return None
+
+    devices = [item.strip() for item in raw_value.split(",") if item.strip()]
+    if not devices:
+        return None
+    return ",".join(devices)
+
+
+def _resolve_runtime_visible_devices() -> str | None:
+    runtime_visible_devices = _normalize_visible_devices(os.getenv("ASCEND_RT_VISIBLE_DEVICES"))
+    if runtime_visible_devices:
+        return runtime_visible_devices
+
+    return _normalize_visible_devices(os.getenv("ASCEND_VISIBLE_DEVICES"))
 
 
 def _has_active_vendor_ascend_env(root: str) -> bool:
@@ -425,12 +476,8 @@ def build_env_dict(ascend_root: str | None = None) -> dict[str, str]:
 
     atb_lib = _find_atb_lib_dir(root=root)
 
-    runtime_version = None
-    version_file = root_path / "runtime/version.info"
-    if version_file.exists():
-        raw = version_file.read_text(encoding="utf-8", errors="ignore")
-        m = re.search(r"([0-9]+(?:\.[0-9A-Za-z]+)+)", raw)
-        runtime_version = m.group(1) if m else None
+    runtime_version = _detect_runtime_version(root)
+    runtime_visible_devices = _resolve_runtime_visible_devices()
 
     has_stream_attr = _ascend_has_stream_attr(root)
     legacy_kernel_layout_issue = _detect_broken_legacy_kernel_layout(root)
@@ -472,6 +519,9 @@ def build_env_dict(ascend_root: str | None = None) -> dict[str, str]:
     atb_set_env = _find_atb_set_env(root=root)
     if atb_set_env:
         exports["HUST_ATB_SET_ENV"] = atb_set_env
+
+    if runtime_visible_devices:
+        exports["ASCEND_RT_VISIBLE_DEVICES"] = runtime_visible_devices
 
     return exports
 
@@ -603,13 +653,7 @@ def collect_report() -> dict[str, Any]:
     hccl = _find_hccl(toolkit)
     rc, npu_smi_out, _ = _run(["npu-smi", "info"])
 
-    runtime_version = None
-    if toolkit:
-        version_file = Path(toolkit) / "runtime/version.info"
-        if version_file.exists():
-            raw = version_file.read_text(encoding="utf-8", errors="ignore")
-            m = re.search(r"([0-9]+(?:\.[0-9A-Za-z]+)+)", raw)
-            runtime_version = m.group(1) if m else None
+    runtime_version = _detect_runtime_version(toolkit)
 
     atb_set_env = _find_atb_set_env(root=toolkit)
     legacy_kernel_layout_issue = _detect_broken_legacy_kernel_layout(toolkit)
