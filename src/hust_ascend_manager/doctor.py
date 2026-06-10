@@ -292,7 +292,7 @@ def _ascend_has_stream_attr(root: str | None) -> bool:
 
 
 def _pip_version(pkg: str) -> str | None:
-    rc, out, _ = _run(["python", "-m", "pip", "show", pkg])
+    rc, out, _ = _run([sys.executable, "-m", "pip", "show", pkg])
     if rc != 0:
         return None
     m = re.search(r"^Version:\s*(.+)$", out, flags=re.MULTILINE)
