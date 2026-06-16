@@ -149,8 +149,11 @@ def test_build_env_dict_augments_active_vendor_ld_when_hccl_is_missing(monkeypat
     ):
         env = doctor.build_env_dict(ascend_root=str(root))
 
-    assert env["LD_LIBRARY_PATH"].startswith(vendor_ld)
-    assert str(root / "runtime/lib64") in env["LD_LIBRARY_PATH"].split(":")
+    ld_parts = env["LD_LIBRARY_PATH"].split(":")
+    assert ld_parts[0] == str(root / "runtime/lib64")
+    assert str(root / "lib64") in ld_parts
+    assert str(root / "lib64/plugin/opskernel") in ld_parts
+    assert "/usr/local/Ascend/driver/lib64" in ld_parts
 
 
 def test_build_env_dict_strips_conda_paths_from_active_vendor_ld(monkeypatch, tmp_path: Path):

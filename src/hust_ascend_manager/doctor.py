@@ -136,7 +136,25 @@ def _find_hccl(root: str | None) -> str | None:
 
 def _collect_runtime_lib_dirs(root: str, hccl_lib: str | None) -> list[str]:
     root_path = Path(root)
-    candidates = [
+    parent_candidates = [root_path.parent]
+    if root_path.parent.parent != root_path.parent:
+        parent_candidates.append(root_path.parent.parent)
+
+    # Driver support libraries must be resolved before toolkit/ATB libraries.
+    # Otherwise libdrvdsmi_host.so and the CANN runtime can bind against an
+    # incompatible support library, which has shown up as npu-smi symbol lookup
+    # failures and torch_npu reporting device_count=0 despite /dev/davinci*.
+    candidates: list[Path] = []
+    for parent in parent_candidates:
+        candidates.extend(
+            [
+                parent / "driver/lib64/common",
+                parent / "driver/lib64/driver",
+                parent / "driver/lib64",
+            ]
+        )
+
+    candidates.extend([
         root_path / "lib64",
         root_path / "runtime/lib64",
         root_path / "compiler/lib64",
@@ -150,11 +168,7 @@ def _collect_runtime_lib_dirs(root: str, hccl_lib: str | None) -> list[str]:
         root_path / "lib64/plugin/nnengine",
         root_path / "tools/aml/lib64",
         root_path / "tools/aml/lib64/plugin",
-    ]
-
-    parent_candidates = [root_path.parent]
-    if root_path.parent.parent != root_path.parent:
-        parent_candidates.append(root_path.parent.parent)
+    ])
 
     for parent in parent_candidates:
         candidates.extend(
@@ -162,9 +176,6 @@ def _collect_runtime_lib_dirs(root: str, hccl_lib: str | None) -> list[str]:
                 parent / "hccl/lib64",
                 parent / "compiler/lib64",
                 parent / "aarch64-linux/lib64",
-                parent / "driver/lib64",
-                parent / "driver/lib64/common",
-                parent / "driver/lib64/driver",
             ]
         )
 
@@ -528,7 +539,11 @@ def build_env_dict(ascend_root: str | None = None) -> dict[str, str]:
             item for item in current_ld_parts
             if not any(m in item for m in _CONDA_ENV_LD_MARKERS)
         ]
-        new_ld_parts = _dedupe_paths(current_ld_parts + required_ld_parts)
+        # Keep required CANN/driver libraries before inherited shell paths.
+        # ATB or toolkit paths sourced by set_env.sh can otherwise take
+        # precedence over driver support libraries and make torch_npu see 0
+        # devices even when /dev/davinci* exists.
+        new_ld_parts = _dedupe_paths(required_ld_parts + current_ld_parts)
         new_ld = ":".join(new_ld_parts)
     else:
         clean_ld = _sanitize_ld_path(current_ld)
