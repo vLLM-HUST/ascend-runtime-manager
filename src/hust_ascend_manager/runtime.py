@@ -269,6 +269,7 @@ def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -
         "expected_torch_version": _expected_torch_version(),
         "packages": {
             "torch": _package_version(python_bin, repo_dir, library_path, "torch"),
+            "torch-npu": _package_version(python_bin, repo_dir, library_path, "torch-npu"),
             "transformers": _package_version(python_bin, repo_dir, library_path, "transformers"),
             "tokenizers": _package_version(python_bin, repo_dir, library_path, "tokenizers"),
             "huggingface_hub": _package_version(python_bin, repo_dir, library_path, "huggingface_hub"),

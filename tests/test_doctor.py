@@ -153,6 +153,41 @@ def test_build_env_dict_augments_active_vendor_ld_when_hccl_is_missing(monkeypat
     assert str(root / "runtime/lib64") in env["LD_LIBRARY_PATH"].split(":")
 
 
+def test_build_env_dict_strips_conda_paths_from_active_vendor_ld(monkeypatch, tmp_path: Path):
+    root = tmp_path / "cann-8.5.1"
+    (root / "runtime/lib64").mkdir(parents=True)
+    hccl_lib = root / "runtime/lib64/libhccl.so"
+    hccl_lib.write_text("")
+    conda_lib = "/root/miniconda3/envs/vllm-hust-dev/lib"
+    vendor_ld = f"{root}/runtime/lib64:{conda_lib}:/usr/local/Ascend/driver/lib64"
+
+    monkeypatch.setenv("ASCEND_HOME_PATH", str(root))
+    monkeypatch.setenv("LD_LIBRARY_PATH", vendor_ld)
+
+    with (
+        patch("hust_ascend_manager.doctor._find_hccl", return_value=str(hccl_lib)),
+        patch("hust_ascend_manager.doctor._ascend_has_stream_attr", return_value=True),
+        patch("hust_ascend_manager.doctor._find_atb_lib_dir", return_value=None),
+        patch("hust_ascend_manager.doctor._detect_broken_legacy_kernel_layout", return_value=None),
+    ):
+        env = doctor.build_env_dict(ascend_root=str(root))
+
+    ld_parts = env["LD_LIBRARY_PATH"].split(":")
+    assert conda_lib not in ld_parts
+    assert str(root / "runtime/lib64") in ld_parts
+    assert "/usr/local/Ascend/driver/lib64" in ld_parts
+
+
+def test_strip_conda_ld_paths():
+    ld = "/usr/local/Ascend/cann-8.5.1/runtime/lib64:/root/miniconda3/envs/vllm-hust-dev/lib:/usr/local/Ascend/driver/lib64:/home/user/anaconda3/envs/test/lib"
+    result = doctor._strip_conda_ld_paths(ld)
+    parts = result.split(":")
+    assert "/root/miniconda3/envs/vllm-hust-dev/lib" not in parts
+    assert "/home/user/anaconda3/envs/test/lib" not in parts
+    assert "/usr/local/Ascend/cann-8.5.1/runtime/lib64" in parts
+    assert "/usr/local/Ascend/driver/lib64" in parts
+
+
 def test_detect_runtime_version_falls_back_to_cann_path_name(tmp_path: Path):
     root = tmp_path / "cann-8.5.1"
     root.mkdir(parents=True)

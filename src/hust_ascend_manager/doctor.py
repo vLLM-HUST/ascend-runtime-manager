@@ -26,6 +26,19 @@ _ASCEND_ENV_EXPORT_KEYS = (
 _HOOK_ENV_EXPORT_KEYS = ("LD_LIBRARY_PATH", *_ASCEND_ENV_EXPORT_KEYS)
 _HOOK_UNSET_SENTINEL = "__HUST_ASCEND_MANAGER_UNSET__"
 
+# Path fragments that identify conda/mamba environment library directories.
+# These should never appear in LD_LIBRARY_PATH because conda env libs
+# (libstdc++, libgcc_s, libz, etc.) can shadow system/CANN driver libraries
+# and cause npu-smi, torch_npu, and other Ascend tools to malfunction.
+_CONDA_ENV_LD_MARKERS = (
+    "/conda/",
+    "/miniconda",
+    "/anaconda",
+    "/mambaforge",
+    "/miniforge",
+    "/envs/",
+)
+
 
 def _run(cmd: list[str]) -> tuple[int, str, str]:
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -416,6 +429,25 @@ def _sanitize_ld_path(old_ld: str) -> str:
     return ":".join(kept)
 
 
+def _strip_conda_ld_paths(ld_path: str) -> str:
+    """Remove conda/mamba environment library paths from LD_LIBRARY_PATH.
+
+    Conda env lib directories (e.g. /root/miniconda3/envs/foo/lib) contain
+    system-like libraries (libstdc++, libgcc_s, libz) that can shadow the
+    system/CANN driver versions when placed in LD_LIBRARY_PATH. This causes
+    npu-smi, torch_npu device detection, and other Ascend runtime components
+    to malfunction because they load incompatible library versions.
+    """
+    kept: list[str] = []
+    for item in ld_path.split(":"):
+        if not item:
+            continue
+        if any(marker in item for marker in _CONDA_ENV_LD_MARKERS):
+            continue
+        kept.append(item)
+    return ":".join(kept)
+
+
 def _normalize_visible_devices(raw_value: str | None) -> str | None:
     if raw_value is None:
         return None
@@ -488,11 +520,20 @@ def build_env_dict(ascend_root: str | None = None) -> dict[str, str]:
         required_ld_parts.append(atb_lib)
 
     if _has_active_vendor_ascend_env(root):
-        current_ld_parts = [item for item in current_ld.split(":") if item]
+        current_ld_parts = [
+            item for item in current_ld.split(":") if item
+        ]
+        # Strip conda env library paths — they shadow system/CANN libs
+        current_ld_parts = [
+            item for item in current_ld_parts
+            if not any(m in item for m in _CONDA_ENV_LD_MARKERS)
+        ]
         new_ld_parts = _dedupe_paths(current_ld_parts + required_ld_parts)
         new_ld = ":".join(new_ld_parts)
     else:
         clean_ld = _sanitize_ld_path(current_ld)
+        # Strip conda env library paths from the sanitized result
+        clean_ld = _strip_conda_ld_paths(clean_ld)
         new_ld_parts = list(required_ld_parts)
         if clean_ld:
             new_ld_parts.extend([item for item in clean_ld.split(":") if item])
