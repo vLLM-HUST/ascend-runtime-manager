@@ -90,6 +90,27 @@ def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> d
     return env
 
 
+def _runtime_env_summary(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, Any]:
+    env = _runtime_env(repo_dir, python_bin, library_path)
+    ld_paths = [item for item in env.get("LD_LIBRARY_PATH", "").split(":") if item]
+    conda_ld_paths = [
+        item for item in ld_paths
+        if any(marker in item for marker in (
+            "/conda/", "/miniconda", "/anaconda", "/mambaforge", "/miniforge", "/envs/",
+        ))
+    ]
+    return {
+        "manager_runtime_module": __file__,
+        "ASCEND_VISIBLE_DEVICES": env.get("ASCEND_VISIBLE_DEVICES"),
+        "ASCEND_RT_VISIBLE_DEVICES": env.get("ASCEND_RT_VISIBLE_DEVICES"),
+        "ASCEND_HOME_PATH": env.get("ASCEND_HOME_PATH"),
+        "PYTHONNOUSERSITE": env.get("PYTHONNOUSERSITE"),
+        "ld_library_path_count": len(ld_paths),
+        "conda_ld_paths": conda_ld_paths,
+        "ld_library_path_head": ld_paths[:8],
+    }
+
+
 def _merge_env(*env_layers: dict[str, str]) -> dict[str, str]:
     merged = os.environ.copy()
     for layer in env_layers:
@@ -271,6 +292,7 @@ def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -
         "python_bin": python_bin,
         "python_prefix": str(_python_prefix_from_bin(python_bin)),
         "python_library_path": library_path,
+        "runtime_env": _runtime_env_summary(repo_dir, python_bin, library_path),
         "expected_torch_version": _expected_torch_version(),
         "packages": {
             "torch": _package_version(python_bin, repo_dir, library_path, "torch"),
