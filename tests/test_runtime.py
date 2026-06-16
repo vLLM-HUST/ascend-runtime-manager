@@ -188,7 +188,10 @@ def test_check_vllm_runtime_can_require_npu(tmp_path: Path):
 
 
 def test_torch_npu_runtime_probe_parses_json_payload(tmp_path: Path):
-    payload = '{"torch_npu_import_ok": true, "npu_available": true, "device_count": 8, "error": null}\n'
+    payload = (
+        '{"torch_npu_import_ok": true, "npu_available": true, "device_count": 8, '
+        '"selected_device": "npu:0", "allocation_ok": true, "error": null}\n'
+    )
 
     class Result:
         returncode = 0
@@ -202,6 +205,8 @@ def test_torch_npu_runtime_probe_parses_json_payload(tmp_path: Path):
         "torch_npu_import_ok": True,
         "npu_available": True,
         "device_count": 8,
+        "selected_device": "npu:0",
+        "allocation_ok": True,
         "error": None,
     }
 

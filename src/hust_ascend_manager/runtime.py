@@ -223,10 +223,32 @@ def _torch_npu_runtime_probe(
                 "except Exception as exc:\n"
                 "    print(json.dumps({'torch_npu_import_ok': False, 'npu_available': False, 'device_count': None, 'error': repr(exc)}))\n"
                 "    raise SystemExit(0)\n"
-                "payload = {'torch_npu_import_ok': True, 'npu_available': False, 'device_count': None, 'error': None}\n"
+                "payload = {'torch_npu_import_ok': True, 'npu_available': False, 'device_count': None, 'selected_device': None, 'allocation_ok': False, 'error': None}\n"
                 "try:\n"
                 "    payload['npu_available'] = bool(torch.npu.is_available())\n"
                 "    payload['device_count'] = int(torch.npu.device_count())\n"
+                "    if payload['device_count'] and payload['device_count'] > 0:\n"
+                "        import os\n"
+                "        preferred_device = os.environ.get('VLLM_ASCEND_TORCH_PREFLIGHT_DEVICE', 'npu:0')\n"
+                "        preferred_index = 0\n"
+                "        if ':' in preferred_device:\n"
+                "            try:\n"
+                "                preferred_index = int(preferred_device.rsplit(':', 1)[1])\n"
+                "            except ValueError:\n"
+                "                preferred_index = 0\n"
+                "        candidates = [f'npu:{(preferred_index + offset) % payload[\"device_count\"]}' for offset in range(payload['device_count'])]\n"
+                "        allocation_errors = []\n"
+                "        for device in candidates:\n"
+                "            try:\n"
+                "                torch.npu.set_device(device)\n"
+                "                _ = torch.zeros(1, device=device)\n"
+                "                payload['selected_device'] = device\n"
+                "                payload['allocation_ok'] = True\n"
+                "                break\n"
+                "            except Exception as exc:\n"
+                "                allocation_errors.append(f'{device}: {exc!r}')\n"
+                "        if not payload['allocation_ok']:\n"
+                "            payload['error'] = 'torch_npu allocation failed on all visible devices: ' + '; '.join(allocation_errors)\n"
                 "except Exception as exc:\n"
                 "    payload['error'] = repr(exc)\n"
                 "print(json.dumps(payload))\n"
@@ -244,6 +266,8 @@ def _torch_npu_runtime_probe(
             "torch_npu_import_ok": False,
             "npu_available": False,
             "device_count": None,
+            "selected_device": None,
+            "allocation_ok": False,
             "error": raw_output or f"probe exited with code {probe.returncode}",
         }
 
@@ -252,6 +276,8 @@ def _torch_npu_runtime_probe(
             "torch_npu_import_ok": False,
             "npu_available": False,
             "device_count": None,
+            "selected_device": None,
+            "allocation_ok": False,
             "error": "torch_npu probe produced no output",
         }
 
@@ -267,6 +293,8 @@ def _torch_npu_runtime_probe(
             "torch_npu_import_ok": bool(payload.get("torch_npu_import_ok")),
             "npu_available": bool(payload.get("npu_available")),
             "device_count": payload.get("device_count"),
+            "selected_device": payload.get("selected_device"),
+            "allocation_ok": bool(payload.get("allocation_ok")),
             "error": payload.get("error"),
         }
 
@@ -274,6 +302,8 @@ def _torch_npu_runtime_probe(
         "torch_npu_import_ok": False,
         "npu_available": False,
         "device_count": None,
+        "selected_device": None,
+        "allocation_ok": False,
         "error": raw_output,
     }
 
@@ -338,6 +368,9 @@ def _print_report(report: dict[str, Any], json_output: bool) -> None:
     print(f"torch_npu_import_ok={str(probe['torch_npu_import_ok']).lower()}")
     print(f"npu_available={str(probe['npu_available']).lower()}")
     print(f"npu_device_count={probe['device_count'] if probe['device_count'] is not None else '<unknown>'}")
+    print(f"npu_allocation_ok={str(bool(probe.get('allocation_ok'))).lower()}")
+    if probe.get("selected_device"):
+        print(f"selected_device={probe['selected_device']}")
     if probe["error"]:
         print(f"npu_probe_error={probe['error']}")
     print(f"import_ok={str(report['import_ok']).lower()}")
@@ -365,6 +398,7 @@ def check_vllm_runtime(
         and probe["npu_available"]
         and isinstance(probe["device_count"], int)
         and probe["device_count"] > 0
+        and probe.get("allocation_ok")
         and not probe["error"]
     ) or not require_npu
     return 0 if report["import_ok"] and plugin_ok and provider_ok and npu_ok else 1
