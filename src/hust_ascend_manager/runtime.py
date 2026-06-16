@@ -68,7 +68,12 @@ def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> d
         pass
     env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONPATH"] = str(repo_dir) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
-    if library_path:
+    if library_path and not any(marker in library_path for marker in (
+        "/conda/", "/miniconda", "/anaconda", "/mambaforge", "/miniforge", "/envs/",
+    )):
+        # Only prepend the Python library path if it's NOT a conda env lib
+        # directory.  Conda libs (libstdc++, libgcc_s) shadow CANN driver libs
+        # and cause torch_npu device init to fail silently (device_count=0).
         env["LD_LIBRARY_PATH"] = library_path + (f":{env['LD_LIBRARY_PATH']}" if env.get("LD_LIBRARY_PATH") else "")
 
     runtime_visible_devices = env.get("ASCEND_RT_VISIBLE_DEVICES")
