@@ -386,6 +386,12 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
     for host_path in (
+        "/data/shared_models",
+    ):
+        if Path(host_path).exists():
+            volume_args.extend(["-v", f"{host_path}:{host_path}"])
+
+    for host_path in (
         "/usr/local/dcmi",
         "/usr/local/Ascend/driver/tools/hccn_tool",
         "/usr/local/sbin/npu-smi",
