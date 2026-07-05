@@ -339,10 +339,39 @@ def ensure_host_paths(config: ContainerConfig) -> int:
     return 0
 
 
+def _selected_npu_device_ids() -> list[str] | None:
+    raw = (
+        os.getenv("HUST_ASCEND_CONTAINER_NPU_DEVICES")
+        or os.getenv("HUST_ASCEND_CONTAINER_VISIBLE_DEVICES")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+
+    device_ids: list[str] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if not re.fullmatch(r"[0-9]+", item):
+            raise ValueError(f"invalid NPU device id in HUST_ASCEND_CONTAINER_NPU_DEVICES: {item!r}")
+        if item not in device_ids:
+            device_ids.append(item)
+
+    return device_ids or None
+
+
 def discover_device_args() -> list[str]:
     device_args: list[str] = []
-    device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+    selected_ids = _selected_npu_device_ids()
+    if selected_ids is None:
+        device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+    else:
+        device_paths = [Path(f"/dev/davinci{device_id}") for device_id in selected_ids]
+
     for device_path in device_paths:
+        if not device_path.exists():
+            raise FileNotFoundError(f"selected Ascend device node not found: {device_path}")
         device_args.extend(["--device", str(device_path)])
 
     for extra_path in (
