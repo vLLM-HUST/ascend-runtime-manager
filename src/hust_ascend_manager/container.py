@@ -25,6 +25,7 @@ DEFAULT_CONTAINER_SSH_USER = "shuhao"
 STATUS_TABLE_FORMAT = "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 IDLE_COMMAND = "trap : TERM INT; sleep infinity & wait"
 MIN_DOCKER_PULL_FREE_SPACE_BYTES = 8 * 1024 * 1024 * 1024
+DEFAULT_HOST_MODEL_ROOTS = ("/data/shared_models",)
 
 _OFFICIAL_IMAGE_SUFFIXES = {
     ("910b", "ubuntu"): "",
@@ -339,11 +340,30 @@ def ensure_host_paths(config: ContainerConfig) -> int:
     return 0
 
 
+def _selected_davinci_devices() -> list[str] | None:
+    raw = os.getenv("HUST_ASCEND_MANAGER_VISIBLE_DEVICES", "").strip()
+    if not raw:
+        return None
+    selected: list[str] = []
+    for item in raw.split(","):
+        device_id = item.strip()
+        if device_id and device_id.isdigit() and device_id not in selected:
+            selected.append(device_id)
+    return selected or None
+
+
 def discover_device_args() -> list[str]:
     device_args: list[str] = []
-    device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
-    for device_path in device_paths:
-        device_args.extend(["--device", str(device_path)])
+    selected_devices = _selected_davinci_devices()
+    if selected_devices is None:
+        device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+        for device_path in device_paths:
+            device_args.extend(["--device", str(device_path)])
+    else:
+        for physical_id in selected_devices:
+            device_path = Path(f"/dev/davinci{physical_id}")
+            if device_path.exists():
+                device_args.extend(["--device", str(device_path)])
 
     for extra_path in (
         Path("/dev/davinci_manager"),
@@ -364,8 +384,20 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
         f"{config.host_cache_dir}:/root/.cache",
     ]
 
-    symlink_mounts: set[tuple[str, str]] = set()
     workspace_root = Path(config.host_workspace_root)
+    parent_repo = workspace_root.parent
+    if (
+        workspace_root.name == "third_party"
+        and (parent_repo / "src" / "vllm_kvdelta").is_dir()
+    ):
+        volume_args.extend(
+            [
+                "-v",
+                f"{parent_repo}:{config.container_workspace_root.rstrip('/')}/vllm-kvdelta-plugin",
+            ]
+        )
+
+    symlink_mounts: set[tuple[str, str]] = set()
     if workspace_root.is_dir():
         for child_path in workspace_root.iterdir():
             if not child_path.is_symlink():
@@ -384,6 +416,10 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
 
     for source_path, target_path in sorted(symlink_mounts):
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
+
+    for host_path in DEFAULT_HOST_MODEL_ROOTS:
+        if Path(host_path).exists():
+            volume_args.extend(["-v", f"{host_path}:{host_path}"])
 
     for host_path in (
         "/usr/local/dcmi",
