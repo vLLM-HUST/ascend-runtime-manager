@@ -386,6 +386,7 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
     for host_path in (
+        "/data",
         "/usr/local/dcmi",
         "/usr/local/Ascend/driver/tools/hccn_tool",
         "/usr/local/sbin/npu-smi",
