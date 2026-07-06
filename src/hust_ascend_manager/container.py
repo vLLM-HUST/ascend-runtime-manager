@@ -52,6 +52,8 @@ class ContainerConfig:
     container_workdir: str = ""
     host_cache_dir: str = ""
     shm_size: str = DEFAULT_SHM_SIZE
+    npu_devices: str = ""
+    privileged: bool = True
 
     def __post_init__(self) -> None:
         if not self.host_workspace_root:
@@ -339,11 +341,29 @@ def ensure_host_paths(config: ContainerConfig) -> int:
     return 0
 
 
-def discover_device_args() -> list[str]:
+def _parse_npu_devices(npu_devices: str) -> list[str]:
+    selected: list[str] = []
+    for raw_item in npu_devices.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if not re.fullmatch(r"[0-9]+", item):
+            raise ValueError(f"invalid NPU device id: {item!r}")
+        selected.append(item)
+    return selected
+
+
+def discover_device_args(npu_devices: str = "") -> list[str]:
     device_args: list[str] = []
-    device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+    if npu_devices.strip():
+        selected_devices = _parse_npu_devices(npu_devices)
+        device_paths = [Path(f"/dev/davinci{device}") for device in selected_devices]
+    else:
+        device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+
     for device_path in device_paths:
-        device_args.extend(["--device", str(device_path)])
+        if device_path.exists():
+            device_args.extend(["--device", str(device_path)])
 
     for extra_path in (
         Path("/dev/davinci_manager"),
@@ -354,6 +374,15 @@ def discover_device_args() -> list[str]:
             device_args.extend(["--device", str(extra_path)])
 
     return device_args
+
+
+def build_expected_device_paths(config: ContainerConfig) -> set[str]:
+    device_args = discover_device_args(config.npu_devices)
+    return {
+        device_args[index + 1]
+        for index in range(0, len(device_args), 2)
+        if device_args[index] == "--device"
+    }
 
 
 def build_volume_args(config: ContainerConfig) -> list[str]:
@@ -386,6 +415,7 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
     for host_path in (
+        "/data",
         "/usr/local/dcmi",
         "/usr/local/Ascend/driver/tools/hccn_tool",
         "/usr/local/sbin/npu-smi",
@@ -434,6 +464,27 @@ def container_has_expected_mounts(docker_cmd: list[str], config: ContainerConfig
         expected_mounts.add((source_path, target_path))
 
     return expected_mounts.issubset(actual_mounts)
+
+
+def container_has_expected_runtime_policy(docker_cmd: list[str], config: ContainerConfig) -> bool:
+    proc = docker_capture(docker_cmd, ["inspect", "-f", "{{json .HostConfig}}", config.container_name])
+    if proc.returncode != 0:
+        return False
+
+    try:
+        host_config = json.loads(proc.stdout.strip())
+    except json.JSONDecodeError:
+        return False
+
+    if bool(host_config.get("Privileged")) != bool(config.privileged):
+        return False
+
+    configured_devices = {
+        item.get("PathOnHost", "")
+        for item in host_config.get("Devices", [])
+        if item.get("PathOnHost")
+    }
+    return build_expected_device_paths(config).issubset(configured_devices)
 
 
 def container_bootstrap_snippet(config: ContainerConfig) -> str:
@@ -590,11 +641,12 @@ def install_container(
 
         needs_startup_refresh = require_runtime_bootstrap and not container_has_expected_startup(docker_cmd, config)
         mounts_are_stale = not container_has_expected_mounts(docker_cmd, config)
+        runtime_policy_is_stale = not container_has_expected_runtime_policy(docker_cmd, config)
 
-        if needs_startup_refresh or mounts_are_stale:
+        if needs_startup_refresh or mounts_are_stale or runtime_policy_is_stale:
             if recreate_outdated_container:
                 _log(
-                    f"recreating container {config.container_name} so startup hooks and bind mounts match the current quickstart configuration"
+                    f"recreating container {config.container_name} so startup hooks, bind mounts, and device policy match the current quickstart configuration"
                 )
                 if container_running(docker_cmd, config.container_name):
                     rc = run_docker(docker_cmd, ["stop", config.container_name]).returncode
@@ -609,6 +661,8 @@ def install_container(
                     reason_parts.append("startup hooks differ from the current quickstart configuration")
                 if mounts_are_stale:
                     reason_parts.append("bind mounts differ from the current quickstart configuration")
+                if runtime_policy_is_stale:
+                    reason_parts.append("device policy differs from the current quickstart configuration")
                 _log(
                     f"preserving existing container {config.container_name}; "
                     + " and ".join(reason_parts)
@@ -628,7 +682,10 @@ def install_container(
             _log(f"starting existing container {config.container_name}")
             return run_docker(docker_cmd, ["start", config.container_name]).returncode
 
-    device_args = discover_device_args()
+    try:
+        device_args = discover_device_args(config.npu_devices)
+    except ValueError as exc:
+        return _fail(str(exc))
     if not device_args:
         return _fail("no Ascend device nodes were found under /dev")
 
@@ -637,7 +694,6 @@ def install_container(
     run_args = [
         "run",
         "-d",
-        "--privileged",
         "--name",
         config.container_name,
         "--shm-size",
@@ -650,6 +706,8 @@ def install_container(
         config.image,
         *desired_container_cmd(config),
     ]
+    if config.privileged:
+        run_args.insert(2, "--privileged")
     return run_docker(docker_cmd, run_args).returncode
 
 

@@ -14,6 +14,7 @@ from hust_ascend_manager.container import build_volume_args
 from hust_ascend_manager.container import container_has_expected_startup
 from hust_ascend_manager.container import container_bootstrap_snippet
 from hust_ascend_manager.container import container_has_expected_mounts
+from hust_ascend_manager.container import container_has_expected_runtime_policy
 from hust_ascend_manager.container import container_runtime_script_path
 from hust_ascend_manager.container import default_authorized_keys_source
 from hust_ascend_manager.container import desired_container_cmd
@@ -231,6 +232,56 @@ def test_discover_device_args_includes_special_devices(tmp_path: Path):
         "--device",
         "/dev/hisi_hdc",
     ]
+
+
+def test_discover_device_args_can_limit_host_npus(tmp_path: Path):
+    fake_devices = {
+        "/dev/davinci1",
+        "/dev/davinci_manager",
+        "/dev/devmm_svm",
+        "/dev/hisi_hdc",
+    }
+
+    def fake_exists(path: Path) -> bool:
+        return str(path) in fake_devices
+
+    with patch("hust_ascend_manager.container.Path.exists", autospec=True, side_effect=fake_exists):
+        args = discover_device_args("1")
+
+    assert args == [
+        "--device",
+        "/dev/davinci1",
+        "--device",
+        "/dev/davinci_manager",
+        "--device",
+        "/dev/devmm_svm",
+        "--device",
+        "/dev/hisi_hdc",
+    ]
+
+
+def test_container_runtime_policy_checks_privileged_and_devices():
+    config = ContainerConfig(npu_devices="1", privileged=False)
+    inspect_host_config = Mock(
+        returncode=0,
+        stdout=(
+            '{"Privileged": false, "Devices": ['
+            '{"PathOnHost": "/dev/davinci1"}, '
+            '{"PathOnHost": "/dev/davinci_manager"}, '
+            '{"PathOnHost": "/dev/devmm_svm"}, '
+            '{"PathOnHost": "/dev/hisi_hdc"}]}'
+        ),
+        stderr="",
+    )
+
+    with (
+        patch("hust_ascend_manager.container.docker_capture", return_value=inspect_host_config),
+        patch(
+            "hust_ascend_manager.container.build_expected_device_paths",
+            return_value={"/dev/davinci1", "/dev/davinci_manager", "/dev/devmm_svm", "/dev/hisi_hdc"},
+        ),
+    ):
+        assert container_has_expected_runtime_policy(["docker"], config) is True
 
 
 def test_install_container_creates_container_when_missing(tmp_path: Path):

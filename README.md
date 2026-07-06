@@ -21,6 +21,7 @@ This repository isolates system-level Ascend dependency management from runtime 
 - `hust-ascend-manager runtime repair --repo /home/shuhao/vllm-hust --install-plugin`
 - `hust-ascend-manager launch Qwen/Qwen2.5-1.5B-Instruct`
 - `hust-ascend-manager container install --host-workspace-root /home/shuhao`
+- `hust-ascend-manager container install --host-workspace-root /home/shuhao --npu-devices 1 --no-privileged`
 - `hust-ascend-manager container shell --host-workspace-root /home/shuhao`
 - `hust-ascend-manager container install --non-interactive --host-workspace-root /home/shuhao`
 - `hust-ascend-manager container exec --host-workspace-root /home/shuhao -- python -c 'import torch; import torch_npu; print(torch.npu.device_count())'`
@@ -116,7 +117,12 @@ model/runtime combinations. To opt out, pass `--no-prefill-compat-mode`.
 `container` is the source of truth for the official Huawei Ascend container
 workflow. `container install` is the one-click path: it pulls the configured
 image when needed, mounts Ascend devices and driver paths from the host, mounts
-your workspace into `/workspace`, and creates or starts a persistent container.
+your workspace into `/workspace`, mounts host `/data` when present for local
+model and benchmark assets, and creates or starts a persistent container.
+For reproducible single-device experiments, pass `--npu-devices <ids>` together
+with `--no-privileged`; this mounts only the requested `/dev/davinci*` nodes plus
+the common Ascend management devices, and the manager recreates an existing
+container if its device policy no longer matches.
 When `--image` is omitted, the manager now defaults to the `v0.17.0rc1` image
 family, probes the host for an A2/910B vs A3 recommendation, and interactively
 confirms the official variant (`v0.17.0rc1`, `-a3`, `-openeuler`, or
