@@ -21,6 +21,7 @@ from hust_ascend_manager.container import discover_device_args
 from hust_ascend_manager.container import enable_container_ssh
 from hust_ascend_manager.container import ensure_image_present
 from hust_ascend_manager.container import install_container
+from hust_ascend_manager.container import parse_extra_mounts
 from hust_ascend_manager.container import parse_ssh_enable_options
 from hust_ascend_manager.container import resolve_container_image
 from hust_ascend_manager.container import run_container_action
@@ -88,6 +89,48 @@ def test_build_volume_args_includes_workspace_and_cache(tmp_path: Path):
 
     assert f"{workspace_root}:/workspace" in args
     assert f"{cache_dir}:/root/.cache" in args
+
+
+def test_parse_extra_mounts_requires_absolute_host_and_container_paths():
+    assert parse_extra_mounts("/data:/data,/models:/models") == (
+        ("/data", "/data"),
+        ("/models", "/models"),
+    )
+
+
+def test_build_volume_args_includes_explicit_extra_mounts(tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        container_workspace_root="/workspace",
+        host_cache_dir=str(cache_dir),
+        extra_mounts=(("/data", "/data"),),
+    )
+
+    args = build_volume_args(config)
+
+    assert "/data:/data" in args
+
+
+def test_container_config_reads_extra_mounts_from_environment(tmp_path: Path, monkeypatch):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    monkeypatch.setenv("HUST_ASCEND_CONTAINER_EXTRA_MOUNTS", "/data:/data")
+
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        container_workspace_root="/workspace",
+        host_cache_dir=str(cache_dir),
+    )
+
+    assert config.extra_mounts == (("/data", "/data"),)
+    assert "/data:/data" in build_volume_args(config)
 
 
 def test_build_volume_args_includes_external_symlink_targets(tmp_path: Path):

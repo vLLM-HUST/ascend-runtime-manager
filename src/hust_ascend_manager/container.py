@@ -52,6 +52,7 @@ class ContainerConfig:
     container_workdir: str = ""
     host_cache_dir: str = ""
     shm_size: str = DEFAULT_SHM_SIZE
+    extra_mounts: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.host_workspace_root:
@@ -60,6 +61,10 @@ class ContainerConfig:
             self.container_workdir = f"{self.container_workspace_root.rstrip('/')}/vllm-hust-dev-hub"
         if not self.host_cache_dir:
             self.host_cache_dir = str(Path.home() / DEFAULT_CACHE_SUBDIR)
+        if not self.extra_mounts:
+            self.extra_mounts = parse_extra_mounts(
+                os.getenv("HUST_ASCEND_CONTAINER_EXTRA_MOUNTS", "")
+            )
 
 
 def _default_host_workspace_root() -> str:
@@ -73,6 +78,36 @@ def _log(message: str) -> None:
 def _fail(message: str) -> int:
     print(f"[container] {message}", file=sys.stderr)
     return 1
+
+
+def parse_extra_mounts(raw_value: str) -> tuple[tuple[str, str], ...]:
+    """Parse host:container bind mounts from an environment-style string."""
+
+    mounts: list[tuple[str, str]] = []
+    for raw_item in raw_value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                "HUST_ASCEND_CONTAINER_EXTRA_MOUNTS entries must use "
+                f"host_path:container_path format: {item!r}"
+            )
+        source, target = item.split(":", 1)
+        source = source.strip()
+        target = target.strip()
+        if not source or not target:
+            raise ValueError(
+                "HUST_ASCEND_CONTAINER_EXTRA_MOUNTS entries must include "
+                f"both source and target paths: {item!r}"
+            )
+        if not source.startswith("/") or not target.startswith("/"):
+            raise ValueError(
+                "HUST_ASCEND_CONTAINER_EXTRA_MOUNTS requires absolute paths: "
+                f"{item!r}"
+            )
+        mounts.append((source, target))
+    return tuple(mounts)
 
 
 def _default_image_tag() -> str:
@@ -412,6 +447,9 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
             symlink_mounts.add((resolved_str, resolved_str))
 
     for source_path, target_path in sorted(symlink_mounts):
+        volume_args.extend(["-v", f"{source_path}:{target_path}"])
+
+    for source_path, target_path in config.extra_mounts:
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
     for host_path in (
