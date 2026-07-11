@@ -52,6 +52,7 @@ class ContainerConfig:
     container_workdir: str = ""
     host_cache_dir: str = ""
     shm_size: str = DEFAULT_SHM_SIZE
+    privileged: bool = True
 
     def __post_init__(self) -> None:
         if not self.host_workspace_root:
@@ -339,11 +340,52 @@ def ensure_host_paths(config: ContainerConfig) -> int:
     return 0
 
 
+def _normalize_device_list(raw_value: str | None) -> list[str]:
+    if raw_value is None:
+        return []
+    devices: list[str] = []
+    for item in raw_value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if not item.isdigit():
+            continue
+        devices.append(item)
+    return devices
+
+
+def _requested_davinci_devices() -> list[str]:
+    for env_name in (
+        "VLLM_ENGINE_NPU_DEVICES",
+        "ASCEND_RT_VISIBLE_DEVICES",
+        "ASCEND_VISIBLE_DEVICES",
+    ):
+        devices = _normalize_device_list(os.getenv(env_name))
+        if devices:
+            return devices
+    return []
+
+
 def discover_device_args() -> list[str]:
     device_args: list[str] = []
-    device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
-    for device_path in device_paths:
-        device_args.extend(["--device", str(device_path)])
+    requested_devices = _requested_davinci_devices()
+    if requested_devices:
+        device_paths = [Path(f"/dev/davinci{device}") for device in requested_devices]
+    else:
+        device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+    for container_ordinal, device_path in enumerate(device_paths):
+        if device_path.exists():
+            if requested_devices:
+                # Keep requested physical device ids stable inside the
+                # container.  CANN/DCMI also see manager devices, and on shared
+                # hosts ordinal remapping can let ASCEND_VISIBLE_DEVICES=0
+                # select an unintended physical card.  Preserving the physical
+                # /dev/davinciN path keeps device files and visible-device
+                # environment variables in the same coordinate system.
+                target_path = str(device_path)
+                device_args.extend(["--device", f"{device_path}:{target_path}"])
+            else:
+                device_args.extend(["--device", str(device_path)])
 
     for extra_path in (
         Path("/dev/davinci_manager"),
@@ -638,7 +680,6 @@ def install_container(
     run_args = [
         "run",
         "-d",
-        "--privileged",
         "--name",
         config.container_name,
         "--shm-size",
@@ -651,6 +692,8 @@ def install_container(
         config.image,
         *desired_container_cmd(config),
     ]
+    if config.privileged:
+        run_args.insert(2, "--privileged")
     return run_docker(docker_cmd, run_args).returncode
 
 

@@ -233,6 +233,36 @@ def test_discover_device_args_includes_special_devices(tmp_path: Path):
     ]
 
 
+def test_discover_device_args_respects_requested_npu_devices(monkeypatch):
+    monkeypatch.setenv("VLLM_ENGINE_NPU_DEVICES", "2")
+
+    def fake_exists(path: Path) -> bool:
+        return str(path) in {
+            "/dev/davinci2",
+            "/dev/davinci_manager",
+            "/dev/devmm_svm",
+            "/dev/hisi_hdc",
+        }
+
+    with patch(
+        "hust_ascend_manager.container.Path.exists",
+        autospec=True,
+        side_effect=fake_exists,
+    ):
+        args = discover_device_args()
+
+    assert args == [
+        "--device",
+        "/dev/davinci2:/dev/davinci2",
+        "--device",
+        "/dev/davinci_manager",
+        "--device",
+        "/dev/devmm_svm",
+        "--device",
+        "/dev/hisi_hdc",
+    ]
+
+
 def test_install_container_creates_container_when_missing(tmp_path: Path):
     workspace_root = tmp_path / "workspace"
     cache_dir = tmp_path / "cache"
@@ -260,9 +290,42 @@ def test_install_container_creates_container_when_missing(tmp_path: Path):
     assert rc == 0
     docker_args = run_mock.call_args.args[1]
     assert docker_args[:2] == ["run", "-d"]
+    assert "--privileged" in docker_args
     assert "demo" in docker_args
     assert "image:latest" in docker_args
     assert docker_args[-3:] == ["bash", "-lc", "bash /workspace/demo/scripts/ascend-container-runtime.sh"]
+
+
+def test_install_container_can_disable_privileged_mode(tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    config = ContainerConfig(
+        image="image:latest",
+        container_name="demo",
+        host_workspace_root=str(workspace_root),
+        container_workdir="/workspace/demo",
+        host_cache_dir=str(cache_dir),
+        privileged=False,
+    )
+
+    with (
+        patch(
+            "hust_ascend_manager.container.docker_capture",
+            side_effect=[
+                Mock(returncode=0, stdout="", stderr=""),
+                Mock(returncode=1, stdout="", stderr=""),
+            ],
+        ),
+        patch("hust_ascend_manager.container.discover_device_args", return_value=["--device", "/dev/davinci2:/dev/davinci2"]),
+        patch("hust_ascend_manager.container.run_docker", return_value=Mock(returncode=0)) as run_mock,
+    ):
+        rc = install_container(["docker"], config)
+
+    assert rc == 0
+    docker_args = run_mock.call_args.args[1]
+    assert "--privileged" not in docker_args
+    assert "/dev/davinci2:/dev/davinci2" in docker_args
 
 
 def test_ensure_image_present_fails_fast_when_docker_storage_is_low(tmp_path: Path, capsys):

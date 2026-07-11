@@ -117,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_container.add_argument("--host-cache-dir", default=None, help="Host cache directory to mount to /root/.cache")
     p_container.add_argument("--shm-size", default=None, help="Container shared memory size")
     p_container.add_argument(
+        "--no-privileged",
+        action="store_true",
+        help="Create the container without Docker --privileged; use explicit device mounts only",
+    )
+    p_container.add_argument(
         "--non-interactive",
         action="store_true",
         help="Skip image selection prompts and rely on host auto-detection/defaults",
@@ -210,6 +215,7 @@ def main() -> int:
             container_workdir=args.container_workdir or "",
             host_cache_dir=args.host_cache_dir or "",
             shm_size=args.shm_size or DEFAULT_SHM_SIZE,
+            privileged=not bool(args.no_privileged),
         )
         return run_container_action(args.action, config, command=list(unknown_args))
 
