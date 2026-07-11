@@ -14,6 +14,7 @@ from hust_ascend_manager.container import build_volume_args
 from hust_ascend_manager.container import container_has_expected_startup
 from hust_ascend_manager.container import container_bootstrap_snippet
 from hust_ascend_manager.container import container_has_expected_mounts
+from hust_ascend_manager.container import container_has_expected_devices
 from hust_ascend_manager.container import container_runtime_script_path
 from hust_ascend_manager.container import default_authorized_keys_source
 from hust_ascend_manager.container import desired_container_cmd
@@ -181,6 +182,44 @@ def test_container_has_expected_mounts_matches_volume_args(tmp_path: Path):
         ),
     ):
         assert container_has_expected_mounts(["docker"], config) is True
+
+
+def test_container_has_expected_devices_matches_device_bindings(tmp_path: Path):
+    config = ContainerConfig(privileged=False)
+    inspect_host_config = Mock(
+        returncode=0,
+        stdout=(
+            '{"Privileged": false, "Devices": ['
+            '{"PathOnHost": "/dev/davinci2", "PathInContainer": "/dev/davinci2"}, '
+            '{"PathOnHost": "/dev/davinci_manager", "PathInContainer": "/dev/davinci_manager"}'
+            "]}"
+        ),
+        stderr="",
+    )
+
+    with patch("hust_ascend_manager.container.docker_capture", return_value=inspect_host_config):
+        assert container_has_expected_devices(
+            ["docker"],
+            config,
+            [
+                "--device",
+                "/dev/davinci2:/dev/davinci2",
+                "--device",
+                "/dev/davinci_manager",
+            ],
+        )
+
+
+def test_container_has_expected_devices_rejects_stale_privileged_container(tmp_path: Path):
+    config = ContainerConfig(privileged=False)
+    inspect_host_config = Mock(
+        returncode=0,
+        stdout='{"Privileged": true, "Devices": []}',
+        stderr="",
+    )
+
+    with patch("hust_ascend_manager.container.docker_capture", return_value=inspect_host_config):
+        assert not container_has_expected_devices(["docker"], config, ["--device", "/dev/davinci2:/dev/davinci2"])
 
 
 def test_build_container_ssh_setup_command_contains_expected_settings():

@@ -479,6 +479,48 @@ def container_has_expected_mounts(docker_cmd: list[str], config: ContainerConfig
     return expected_mounts.issubset(actual_mounts)
 
 
+def _device_pairs_from_args(device_args: list[str]) -> set[tuple[str, str]]:
+    pairs: set[tuple[str, str]] = set()
+    index = 0
+    while index < len(device_args):
+        if device_args[index] != "--device" or index + 1 >= len(device_args):
+            index += 1
+            continue
+        raw_device = device_args[index + 1]
+        parts = raw_device.split(":")
+        host_path = parts[0]
+        container_path = parts[1] if len(parts) > 1 and parts[1] else host_path
+        pairs.add((host_path, container_path))
+        index += 2
+    return pairs
+
+
+def container_has_expected_devices(
+    docker_cmd: list[str],
+    config: ContainerConfig,
+    expected_device_args: list[str],
+) -> bool:
+    proc = docker_capture(docker_cmd, ["inspect", "-f", "{{json .HostConfig}}", config.container_name])
+    if proc.returncode != 0:
+        return False
+
+    try:
+        host_config = json.loads(proc.stdout.strip())
+    except json.JSONDecodeError:
+        return False
+
+    if bool(host_config.get("Privileged")) != config.privileged:
+        return False
+
+    expected_devices = _device_pairs_from_args(expected_device_args)
+    actual_devices = {
+        (device.get("PathOnHost", ""), device.get("PathInContainer", ""))
+        for device in host_config.get("Devices", [])
+    }
+
+    return actual_devices == expected_devices
+
+
 def container_bootstrap_snippet(config: ContainerConfig) -> str:
     lines = [
         "if [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then",
@@ -631,10 +673,12 @@ def install_container(
         if rc != 0:
             return rc
 
+        device_args = discover_device_args()
         needs_startup_refresh = require_runtime_bootstrap and not container_has_expected_startup(docker_cmd, config)
         mounts_are_stale = not container_has_expected_mounts(docker_cmd, config)
+        devices_are_stale = not container_has_expected_devices(docker_cmd, config, device_args)
 
-        if needs_startup_refresh or mounts_are_stale:
+        if needs_startup_refresh or mounts_are_stale or devices_are_stale:
             if recreate_outdated_container:
                 _log(
                     f"recreating container {config.container_name} so startup hooks and bind mounts match the current quickstart configuration"
@@ -652,6 +696,8 @@ def install_container(
                     reason_parts.append("startup hooks differ from the current quickstart configuration")
                 if mounts_are_stale:
                     reason_parts.append("bind mounts differ from the current quickstart configuration")
+                if devices_are_stale:
+                    reason_parts.append("device bindings differ from the current quickstart configuration")
                 _log(
                     f"preserving existing container {config.container_name}; "
                     + " and ".join(reason_parts)
