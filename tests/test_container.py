@@ -138,7 +138,7 @@ def test_desired_container_cmd_uses_runtime_script():
 
     assert desired_container_cmd(config) == [
         "bash",
-        "-lc",
+        "-c",
         "bash /workspace/vllm-hust-dev-hub/scripts/ascend-container-runtime.sh",
     ]
 
@@ -148,7 +148,7 @@ def test_container_has_expected_startup_matches_inspected_cmd(tmp_path: Path):
     workspace_root.mkdir()
     config = ContainerConfig(host_workspace_root=str(workspace_root), container_workdir="/workspace/vllm-hust-dev-hub")
 
-    inspect_cmd = Mock(returncode=0, stdout='["bash", "-lc", "bash /workspace/vllm-hust-dev-hub/scripts/ascend-container-runtime.sh"]', stderr="")
+    inspect_cmd = Mock(returncode=0, stdout='["bash", "-c", "bash /workspace/vllm-hust-dev-hub/scripts/ascend-container-runtime.sh"]', stderr="")
     with patch("hust_ascend_manager.container.docker_capture", return_value=inspect_cmd):
         assert container_has_expected_startup(["docker"], config) is True
 
@@ -332,7 +332,7 @@ def test_install_container_creates_container_when_missing(tmp_path: Path):
     assert "--privileged" in docker_args
     assert "demo" in docker_args
     assert "image:latest" in docker_args
-    assert docker_args[-3:] == ["bash", "-lc", "bash /workspace/demo/scripts/ascend-container-runtime.sh"]
+    assert docker_args[-3:] == ["bash", "-c", "bash /workspace/demo/scripts/ascend-container-runtime.sh"]
 
 
 def test_install_container_can_disable_privileged_mode(tmp_path: Path):

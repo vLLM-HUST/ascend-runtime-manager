@@ -543,7 +543,7 @@ def container_runtime_script_path(config: ContainerConfig) -> str:
 
 
 def desired_container_cmd(config: ContainerConfig) -> list[str]:
-    return ["bash", "-lc", f"bash {shlex.quote(container_runtime_script_path(config))}"]
+    return ["bash", "-c", f"bash {shlex.quote(container_runtime_script_path(config))}"]
 
 
 def container_has_expected_startup(docker_cmd: list[str], config: ContainerConfig) -> bool:
@@ -560,7 +560,7 @@ def container_has_expected_startup(docker_cmd: list[str], config: ContainerConfi
 def exec_container_shell(docker_cmd: list[str], config: ContainerConfig, shell_command: str) -> int:
     return run_docker(
         docker_cmd,
-        ["exec", config.container_name, "bash", "-lc", shell_command],
+        ["exec", config.container_name, "bash", "-c", shell_command],
     ).returncode
 
 
@@ -751,7 +751,7 @@ def open_shell(docker_cmd: list[str], config: ContainerConfig) -> int:
     bootstrap = container_bootstrap_snippet(config)
     return run_docker(
         docker_cmd,
-        ["exec", "-it", config.container_name, "bash", "-lc", f"{bootstrap}; exec bash -i"],
+        ["exec", "-it", config.container_name, "bash", "-c", f"{bootstrap}; exec bash -i"],
     ).returncode
 
 
