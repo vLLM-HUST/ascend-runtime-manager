@@ -543,7 +543,7 @@ def container_runtime_script_path(config: ContainerConfig) -> str:
 
 
 def desired_container_cmd(config: ContainerConfig) -> list[str]:
-    return ["bash", "-c", f"bash {shlex.quote(container_runtime_script_path(config))}"]
+    return ["-c", f"bash {shlex.quote(container_runtime_script_path(config))}"]
 
 
 def container_has_expected_startup(docker_cmd: list[str], config: ContainerConfig) -> bool:
@@ -731,6 +731,8 @@ def install_container(
         "--shm-size",
         config.shm_size,
         "--net=host",
+        "--entrypoint",
+        "/bin/bash",
         "-w",
         config.container_workdir,
         *device_args,
