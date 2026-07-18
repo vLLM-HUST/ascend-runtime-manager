@@ -301,6 +301,37 @@ def test_discover_device_args_respects_requested_npu_devices(monkeypatch):
     ]
 
 
+def test_discover_device_args_can_remap_requested_npu_devices_to_ordinals(monkeypatch):
+    monkeypatch.setenv("VLLM_ENGINE_NPU_DEVICES", "2")
+    monkeypatch.setenv("VLLM_HUST_ASCEND_REMAP_REQUESTED_DEVICES_TO_ORDINALS", "1")
+
+    def fake_exists(path: Path) -> bool:
+        return str(path) in {
+            "/dev/davinci2",
+            "/dev/davinci_manager",
+            "/dev/devmm_svm",
+            "/dev/hisi_hdc",
+        }
+
+    with patch(
+        "hust_ascend_manager.container.Path.exists",
+        autospec=True,
+        side_effect=fake_exists,
+    ):
+        args = discover_device_args()
+
+    assert args == [
+        "--device",
+        "/dev/davinci2:/dev/davinci0",
+        "--device",
+        "/dev/davinci_manager",
+        "--device",
+        "/dev/devmm_svm",
+        "--device",
+        "/dev/hisi_hdc",
+    ]
+
+
 def test_install_container_creates_container_when_missing(tmp_path: Path):
     workspace_root = tmp_path / "workspace"
     cache_dir = tmp_path / "cache"

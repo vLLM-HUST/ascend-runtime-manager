@@ -366,9 +366,19 @@ def _requested_davinci_devices() -> list[str]:
     return []
 
 
+def _remap_requested_devices_to_ordinals() -> bool:
+    return os.getenv("VLLM_HUST_ASCEND_REMAP_REQUESTED_DEVICES_TO_ORDINALS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def discover_device_args() -> list[str]:
     device_args: list[str] = []
     requested_devices = _requested_davinci_devices()
+    remap_requested_devices = _remap_requested_devices_to_ordinals()
     if requested_devices:
         device_paths = [Path(f"/dev/davinci{device}") for device in requested_devices]
     else:
@@ -376,13 +386,21 @@ def discover_device_args() -> list[str]:
     for container_ordinal, device_path in enumerate(device_paths):
         if device_path.exists():
             if requested_devices:
-                # Keep requested physical device ids stable inside the
-                # container.  CANN/DCMI also see manager devices, and on shared
-                # hosts ordinal remapping can let ASCEND_VISIBLE_DEVICES=0
-                # select an unintended physical card.  Preserving the physical
-                # /dev/davinciN path keeps device files and visible-device
-                # environment variables in the same coordinate system.
-                target_path = str(device_path)
+                if remap_requested_devices:
+                    # Some Ascend/CANN container stacks expect the selected
+                    # device to appear as logical /dev/davinci0 even when the
+                    # host physical card is NPU2.  Keep this opt-in so default
+                    # behavior remains physically stable.
+                    target_path = f"/dev/davinci{container_ordinal}"
+                else:
+                    # Keep requested physical device ids stable inside the
+                    # container.  CANN/DCMI also see manager devices, and on
+                    # shared hosts ordinal remapping can let
+                    # ASCEND_VISIBLE_DEVICES=0 select an unintended physical
+                    # card.  Preserving the physical /dev/davinciN path keeps
+                    # device files and visible-device environment variables in
+                    # the same coordinate system.
+                    target_path = str(device_path)
                 device_args.extend(["--device", f"{device_path}:{target_path}"])
             else:
                 device_args.extend(["--device", str(device_path)])
