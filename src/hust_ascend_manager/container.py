@@ -54,6 +54,7 @@ class ContainerConfig:
     shm_size: str = DEFAULT_SHM_SIZE
     npu_devices: str = ""
     privileged: bool = True
+    require_exclusive_npu_devices: bool = False
 
     def __post_init__(self) -> None:
         if not self.host_workspace_root:
@@ -376,6 +377,56 @@ def discover_device_args(npu_devices: str = "") -> list[str]:
     return device_args
 
 
+def discover_device_mapping_conflicts(
+    docker_cmd: list[str],
+    requested_device_paths: set[str],
+    *,
+    exclude_container: str = "",
+) -> dict[str, list[str]]:
+    """Return running containers that already map requested NPU nodes."""
+    requested = {
+        path
+        for path in requested_device_paths
+        if re.fullmatch(r"/dev/davinci[0-9]+", path)
+    }
+    if not requested:
+        return {}
+
+    ps_proc = docker_capture(docker_cmd, ["ps", "-q"])
+    container_ids = (
+        [item for item in ps_proc.stdout.split() if item]
+        if ps_proc.returncode == 0
+        else []
+    )
+    if not container_ids:
+        return {}
+
+    inspect_proc = docker_capture(docker_cmd, ["inspect", *container_ids])
+    if inspect_proc.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(inspect_proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+    conflicts: dict[str, list[str]] = {}
+    excluded = exclude_container.lstrip("/")
+    for container in payload:
+        name = str(container.get("Name", "")).lstrip("/")
+        if not name or name == excluded:
+            continue
+        devices = container.get("HostConfig", {}).get("Devices") or []
+        for device in devices:
+            host_path = str(device.get("PathOnHost", ""))
+            if host_path in requested:
+                conflicts.setdefault(host_path, []).append(name)
+
+    return {
+        path: sorted(set(names))
+        for path, names in sorted(conflicts.items())
+    }
+
+
 def build_expected_device_paths(config: ContainerConfig) -> set[str]:
     device_args = discover_device_args(config.npu_devices)
     return {
@@ -688,6 +739,27 @@ def install_container(
         return _fail(str(exc))
     if not device_args:
         return _fail("no Ascend device nodes were found under /dev")
+
+    if config.require_exclusive_npu_devices:
+        expected_paths = {
+            device_args[index + 1]
+            for index in range(0, len(device_args), 2)
+            if device_args[index] == "--device"
+        }
+        conflicts = discover_device_mapping_conflicts(
+            docker_cmd,
+            expected_paths,
+            exclude_container=config.container_name,
+        )
+        if conflicts:
+            details = "; ".join(
+                f"{path}: {', '.join(names)}"
+                for path, names in conflicts.items()
+            )
+            return _fail(
+                "exclusive NPU device mapping preflight failed; "
+                f"running containers already expose the requested device(s): {details}"
+            )
 
     volume_args = build_volume_args(config)
     _log(f"creating container {config.container_name} from {config.image}")

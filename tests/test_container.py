@@ -18,7 +18,7 @@ from hust_ascend_manager.container import container_has_expected_runtime_policy
 from hust_ascend_manager.container import container_runtime_script_path
 from hust_ascend_manager.container import default_authorized_keys_source
 from hust_ascend_manager.container import desired_container_cmd
-from hust_ascend_manager.container import discover_device_args
+from hust_ascend_manager.container import discover_device_args, discover_device_mapping_conflicts
 from hust_ascend_manager.container import enable_container_ssh
 from hust_ascend_manager.container import ensure_image_present
 from hust_ascend_manager.container import install_container
@@ -260,6 +260,50 @@ def test_discover_device_args_can_limit_host_npus(tmp_path: Path):
     ]
 
 
+def test_discover_device_mapping_conflicts_reports_running_container_owners():
+    ps_result = Mock(returncode=0, stdout="owner-a\nowner-b\n")
+    inspect_result = Mock(
+        returncode=0,
+        stdout=(
+            '[{"Name":"/owner-a","HostConfig":{"Devices":['
+            '{"PathOnHost":"/dev/davinci1"}]}},'
+            '{"Name":"/owner-b","HostConfig":{"Devices":['
+            '{"PathOnHost":"/dev/davinci2"}]}}]'
+        ),
+    )
+
+    with patch(
+        "hust_ascend_manager.container.docker_capture",
+        side_effect=[ps_result, inspect_result],
+    ):
+        conflicts = discover_device_mapping_conflicts(
+            ["docker"], {"/dev/davinci1"}, exclude_container="candidate"
+        )
+
+    assert conflicts == {"/dev/davinci1": ["owner-a"]}
+
+
+def test_discover_device_mapping_conflicts_excludes_candidate_container():
+    ps_result = Mock(returncode=0, stdout="candidate\n")
+    inspect_result = Mock(
+        returncode=0,
+        stdout=(
+            '[{"Name":"/candidate","HostConfig":{"Devices":['
+            '{"PathOnHost":"/dev/davinci1"}]}}]'
+        ),
+    )
+
+    with patch(
+        "hust_ascend_manager.container.docker_capture",
+        side_effect=[ps_result, inspect_result],
+    ):
+        conflicts = discover_device_mapping_conflicts(
+            ["docker"], {"/dev/davinci1"}, exclude_container="candidate"
+        )
+
+    assert conflicts == {}
+
+
 def test_container_runtime_policy_checks_privileged_and_devices():
     config = ContainerConfig(npu_devices="1", privileged=False)
     inspect_host_config = Mock(
@@ -314,6 +358,44 @@ def test_install_container_creates_container_when_missing(tmp_path: Path):
     assert "demo" in docker_args
     assert "image:latest" in docker_args
     assert docker_args[-3:] == ["bash", "-lc", "bash /workspace/demo/scripts/ascend-container-runtime.sh"]
+
+
+def test_install_container_exclusive_preflight_blocks_before_docker_run(tmp_path: Path, capsys):
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    config = ContainerConfig(
+        image="image:latest",
+        container_name="candidate",
+        host_workspace_root=str(workspace_root),
+        host_cache_dir=str(tmp_path / "cache"),
+        npu_devices="1",
+        privileged=False,
+        require_exclusive_npu_devices=True,
+    )
+
+    with (
+        patch("hust_ascend_manager.container.ensure_image_present", return_value=0),
+        patch("hust_ascend_manager.container.container_exists", return_value=False),
+        patch(
+            "hust_ascend_manager.container.discover_device_args",
+            return_value=[
+                "--device",
+                "/dev/davinci1",
+                "--device",
+                "/dev/davinci_manager",
+            ],
+        ),
+        patch(
+            "hust_ascend_manager.container.discover_device_mapping_conflicts",
+            return_value={"/dev/davinci1": ["unrelated-owner"]},
+        ),
+        patch("hust_ascend_manager.container.run_docker") as run_mock,
+    ):
+        rc = install_container(["docker"], config)
+
+    assert rc == 1
+    run_mock.assert_not_called()
+    assert "unrelated-owner" in capsys.readouterr().err
 
 
 def test_ensure_image_present_fails_fast_when_docker_storage_is_low(tmp_path: Path, capsys):

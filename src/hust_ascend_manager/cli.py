@@ -127,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create the container without Docker privileged mode; use with --npu-devices for hard device isolation",
     )
     p_container.add_argument(
+        "--require-exclusive-npu-devices",
+        action="store_true",
+        help="Fail if another running container maps a requested davinci device",
+    )
+    p_container.add_argument(
         "--non-interactive",
         action="store_true",
         help="Skip image selection prompts and rely on host auto-detection/defaults",
@@ -222,6 +227,7 @@ def main() -> int:
             shm_size=args.shm_size or DEFAULT_SHM_SIZE,
             npu_devices=args.npu_devices or "",
             privileged=not bool(args.no_privileged),
+            require_exclusive_npu_devices=bool(args.require_exclusive_npu_devices),
         )
         return run_container_action(args.action, config, command=list(unknown_args))
 
