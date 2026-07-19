@@ -420,6 +420,22 @@ def discover_device_args() -> list[str]:
     return device_args
 
 
+def discover_device_cgroup_rule_args() -> list[str]:
+    raw_value = os.getenv("VLLM_HUST_ASCEND_DEVICE_CGROUP_RULES", "")
+    rules: list[str] = []
+    for raw_rule in re.split(r"[;\n]", raw_value):
+        rule = raw_rule.strip()
+        if not rule:
+            continue
+        if not re.fullmatch(r"[bc]\s+\d+:\d+\s+rwm", rule):
+            raise ValueError(
+                "invalid VLLM_HUST_ASCEND_DEVICE_CGROUP_RULES entry: "
+                f"{rule!r}; expected e.g. 'c 503:2 rwm'"
+            )
+        rules.extend(["--device-cgroup-rule", rule])
+    return rules
+
+
 def build_volume_args(config: ContainerConfig) -> list[str]:
     volume_args = [
         "-v",
@@ -531,10 +547,26 @@ def _device_pairs_from_args(device_args: list[str]) -> set[tuple[str, str]]:
     return pairs
 
 
+def _device_cgroup_rules_from_args(device_cgroup_rule_args: list[str]) -> list[str]:
+    rules: list[str] = []
+    index = 0
+    while index < len(device_cgroup_rule_args):
+        if (
+            device_cgroup_rule_args[index] != "--device-cgroup-rule"
+            or index + 1 >= len(device_cgroup_rule_args)
+        ):
+            index += 1
+            continue
+        rules.append(device_cgroup_rule_args[index + 1])
+        index += 2
+    return rules
+
+
 def container_has_expected_devices(
     docker_cmd: list[str],
     config: ContainerConfig,
     expected_device_args: list[str],
+    expected_device_cgroup_rule_args: list[str] | None = None,
 ) -> bool:
     proc = docker_capture(docker_cmd, ["inspect", "-f", "{{json .HostConfig}}", config.container_name])
     if proc.returncode != 0:
@@ -554,7 +586,21 @@ def container_has_expected_devices(
         for device in host_config.get("Devices", [])
     }
 
-    return actual_devices == expected_devices
+    if actual_devices != expected_devices:
+        return False
+
+    expected_cgroup_rules = sorted(
+        _device_cgroup_rules_from_args(expected_device_cgroup_rule_args or [])
+    )
+    actual_cgroup_rules = sorted(host_config.get("DeviceCgroupRules") or [])
+    return actual_cgroup_rules == expected_cgroup_rules
+
+
+def safe_discover_device_cgroup_rule_args() -> list[str]:
+    try:
+        return discover_device_cgroup_rule_args()
+    except ValueError as exc:
+        raise SystemExit(_fail(str(exc))) from exc
 
 
 def container_bootstrap_snippet(config: ContainerConfig) -> str:
@@ -710,9 +756,15 @@ def install_container(
             return rc
 
         device_args = discover_device_args()
+        device_cgroup_rule_args = safe_discover_device_cgroup_rule_args()
         needs_startup_refresh = require_runtime_bootstrap and not container_has_expected_startup(docker_cmd, config)
         mounts_are_stale = not container_has_expected_mounts(docker_cmd, config)
-        devices_are_stale = not container_has_expected_devices(docker_cmd, config, device_args)
+        devices_are_stale = not container_has_expected_devices(
+            docker_cmd,
+            config,
+            device_args,
+            device_cgroup_rule_args,
+        )
 
         if needs_startup_refresh or mounts_are_stale or devices_are_stale:
             if recreate_outdated_container:
@@ -754,6 +806,7 @@ def install_container(
             return run_docker(docker_cmd, ["start", config.container_name]).returncode
 
     device_args = discover_device_args()
+    device_cgroup_rule_args = safe_discover_device_cgroup_rule_args()
     if not device_args:
         return _fail("no Ascend device nodes were found under /dev")
 
@@ -772,6 +825,7 @@ def install_container(
         "-w",
         config.container_workdir,
         *device_args,
+        *device_cgroup_rule_args,
         *volume_args,
         config.image,
         *desired_container_cmd(config),

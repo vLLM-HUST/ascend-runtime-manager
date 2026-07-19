@@ -19,6 +19,7 @@ from hust_ascend_manager.container import container_runtime_script_path
 from hust_ascend_manager.container import default_authorized_keys_source
 from hust_ascend_manager.container import desired_container_cmd
 from hust_ascend_manager.container import discover_device_args
+from hust_ascend_manager.container import discover_device_cgroup_rule_args
 from hust_ascend_manager.container import enable_container_ssh
 from hust_ascend_manager.container import ensure_image_present
 from hust_ascend_manager.container import install_container
@@ -299,6 +300,53 @@ def test_container_has_expected_devices_rejects_stale_privileged_container(tmp_p
         assert not container_has_expected_devices(["docker"], config, ["--device", "/dev/davinci2:/dev/davinci2"])
 
 
+def test_container_has_expected_devices_matches_device_cgroup_rules(tmp_path: Path):
+    config = ContainerConfig(privileged=False)
+    inspect_host_config = Mock(
+        returncode=0,
+        stdout=(
+            '{"Privileged": false, "Devices": ['
+            '{"PathOnHost": "/dev/davinci2", "PathInContainer": "/dev/davinci2"}'
+            '], "DeviceCgroupRules": ["c 503:2 rwm", "c 504:0 rwm"]}'
+        ),
+        stderr="",
+    )
+
+    with patch("hust_ascend_manager.container.docker_capture", return_value=inspect_host_config):
+        assert container_has_expected_devices(
+            ["docker"],
+            config,
+            ["--device", "/dev/davinci2:/dev/davinci2"],
+            [
+                "--device-cgroup-rule",
+                "c 504:0 rwm",
+                "--device-cgroup-rule",
+                "c 503:2 rwm",
+            ],
+        )
+
+
+def test_container_has_expected_devices_rejects_stale_device_cgroup_rules(tmp_path: Path):
+    config = ContainerConfig(privileged=False)
+    inspect_host_config = Mock(
+        returncode=0,
+        stdout=(
+            '{"Privileged": false, "Devices": ['
+            '{"PathOnHost": "/dev/davinci2", "PathInContainer": "/dev/davinci2"}'
+            '], "DeviceCgroupRules": ["c 503:2 rwm"]}'
+        ),
+        stderr="",
+    )
+
+    with patch("hust_ascend_manager.container.docker_capture", return_value=inspect_host_config):
+        assert not container_has_expected_devices(
+            ["docker"],
+            config,
+            ["--device", "/dev/davinci2:/dev/davinci2"],
+            ["--device-cgroup-rule", "c 504:0 rwm"],
+        )
+
+
 def test_build_container_ssh_setup_command_contains_expected_settings():
     config = ContainerConfig(container_workspace_root="/workspace")
 
@@ -410,6 +458,36 @@ def test_discover_device_args_can_remap_requested_npu_devices_to_ordinals(monkey
     ]
 
 
+def test_discover_device_cgroup_rule_args_parses_opt_in_rules(monkeypatch):
+    monkeypatch.setenv(
+        "VLLM_HUST_ASCEND_DEVICE_CGROUP_RULES",
+        "c 501:0 rwm;c 502:0 rwm\nc 503:2 rwm",
+    )
+
+    assert discover_device_cgroup_rule_args() == [
+        "--device-cgroup-rule",
+        "c 501:0 rwm",
+        "--device-cgroup-rule",
+        "c 502:0 rwm",
+        "--device-cgroup-rule",
+        "c 503:2 rwm",
+    ]
+
+
+def test_discover_device_cgroup_rule_args_rejects_shell_like_values(monkeypatch):
+    monkeypatch.setenv(
+        "VLLM_HUST_ASCEND_DEVICE_CGROUP_RULES",
+        "c 503:2 rwm --privileged",
+    )
+
+    try:
+        discover_device_cgroup_rule_args()
+    except ValueError as exc:
+        assert "invalid VLLM_HUST_ASCEND_DEVICE_CGROUP_RULES entry" in str(exc)
+    else:
+        raise AssertionError("expected invalid device cgroup rule to be rejected")
+
+
 def test_install_container_creates_container_when_missing(tmp_path: Path):
     workspace_root = tmp_path / "workspace"
     cache_dir = tmp_path / "cache"
@@ -475,6 +553,44 @@ def test_install_container_can_disable_privileged_mode(tmp_path: Path):
     docker_args = run_mock.call_args.args[1]
     assert "--privileged" not in docker_args
     assert "/dev/davinci2:/dev/davinci2" in docker_args
+
+
+def test_install_container_adds_opt_in_device_cgroup_rules(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv(
+        "VLLM_HUST_ASCEND_DEVICE_CGROUP_RULES",
+        "c 503:2 rwm;c 504:0 rwm",
+    )
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    config = ContainerConfig(
+        image="image:latest",
+        container_name="demo",
+        host_workspace_root=str(workspace_root),
+        container_workdir="/workspace/demo",
+        host_cache_dir=str(cache_dir),
+        privileged=False,
+    )
+
+    with (
+        patch(
+            "hust_ascend_manager.container.docker_capture",
+            side_effect=[
+                Mock(returncode=0, stdout="", stderr=""),
+                Mock(returncode=1, stdout="", stderr=""),
+            ],
+        ),
+        patch("hust_ascend_manager.container.discover_device_args", return_value=["--device", "/dev/davinci2:/dev/davinci2"]),
+        patch("hust_ascend_manager.container.run_docker", return_value=Mock(returncode=0)) as run_mock,
+    ):
+        rc = install_container(["docker"], config)
+
+    assert rc == 0
+    docker_args = run_mock.call_args.args[1]
+    assert "--privileged" not in docker_args
+    assert "--device-cgroup-rule" in docker_args
+    assert "c 503:2 rwm" in docker_args
+    assert "c 504:0 rwm" in docker_args
 
 
 def test_ensure_image_present_fails_fast_when_docker_storage_is_low(tmp_path: Path, capsys):
