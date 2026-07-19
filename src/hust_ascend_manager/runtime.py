@@ -71,13 +71,31 @@ def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> d
     env["TORCH_DEVICE_BACKEND_AUTOLOAD"] = "0"
     env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONPATH"] = str(repo_dir) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
-    if library_path and not any(marker in library_path for marker in (
-        "/conda/", "/miniconda", "/anaconda", "/mambaforge", "/miniforge", "/envs/",
-    )):
-        # Only prepend the Python library path if it's NOT a conda env lib
-        # directory.  Conda libs (libstdc++, libgcc_s) shadow CANN driver libs
-        # and cause torch_npu device init to fail silently (device_count=0).
-        env["LD_LIBRARY_PATH"] = library_path + (f":{env['LD_LIBRARY_PATH']}" if env.get("LD_LIBRARY_PATH") else "")
+    if library_path:
+        current_ld_paths = [
+            item for item in env.get("LD_LIBRARY_PATH", "").split(":") if item
+        ]
+        if library_path not in current_ld_paths:
+            is_conda_library = any(
+                marker in library_path
+                for marker in (
+                    "/conda/",
+                    "/miniconda",
+                    "/anaconda",
+                    "/mambaforge",
+                    "/miniforge",
+                    "/envs/",
+                )
+            )
+            if is_conda_library:
+                # Keep CANN and driver libraries first, but make the selected
+                # Conda Python's C++ runtime available before system defaults.
+                # Newer Conda ICU builds require CXXABI symbols absent from the
+                # host libstdc++, while putting Conda first breaks NPU discovery.
+                current_ld_paths.append(library_path)
+            else:
+                current_ld_paths.insert(0, library_path)
+            env["LD_LIBRARY_PATH"] = ":".join(current_ld_paths)
 
     runtime_visible_devices = env.get("ASCEND_RT_VISIBLE_DEVICES")
     if runtime_visible_devices:

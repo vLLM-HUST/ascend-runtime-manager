@@ -97,6 +97,26 @@ def test_runtime_env_disables_torch_backend_autoload(tmp_path: Path, monkeypatch
     assert merged["TORCH_DEVICE_BACKEND_AUTOLOAD"] == "0"
 
 
+def test_runtime_env_appends_conda_python_library_after_manager_paths(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='vllm-hust'\n", encoding="utf-8"
+    )
+    manager_library = "/usr/local/Ascend/cann-9.0.0/runtime/lib64"
+    conda_library = "/root/miniconda3/envs/vllm-hust-dev/lib"
+
+    with patch(
+        "hust_ascend_manager.runtime.build_env_dict",
+        return_value={"LD_LIBRARY_PATH": manager_library},
+    ):
+        merged = runtime._runtime_env(
+            tmp_path,
+            "/root/miniconda3/envs/vllm-hust-dev/bin/python",
+            conda_library,
+        )
+
+    assert merged["LD_LIBRARY_PATH"] == f"{manager_library}:{conda_library}"
+
+
 def test_runtime_env_drops_empty_rt_visible_devices(tmp_path: Path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='vllm-hust'\n", encoding="utf-8")
     monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", " , ")
