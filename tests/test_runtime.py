@@ -8,9 +8,9 @@ import pytest
 from hust_ascend_manager import runtime
 
 
-def test_expected_torch_version_tracks_arch():
+def test_expected_torch_version_is_consistent_across_architectures():
     assert runtime._expected_torch_version("x86_64") == "2.10.0"
-    assert runtime._expected_torch_version("aarch64") == "2.9.0"
+    assert runtime._expected_torch_version("aarch64") == "2.10.0"
 
 
 def test_resolve_repo_dir_requires_vllm_layout(tmp_path: Path):

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -56,8 +55,9 @@ def _python_library_path(python_bin: str) -> str | None:
 
 
 def _expected_torch_version(machine: str | None = None) -> str:
-    host_machine = machine or platform.machine()
-    return "2.9.0" if host_machine == "aarch64" else "2.10.0"
+    # The CANN 9.0 runtime matrix uses the same torch stack on both supported
+    # runner architectures.
+    return "2.10.0"
 
 
 def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, str]:
