@@ -375,6 +375,10 @@ def _remap_requested_devices_to_ordinals() -> bool:
     }
 
 
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def discover_device_args() -> list[str]:
     device_args: list[str] = []
     requested_devices = _requested_davinci_devices()
@@ -445,15 +449,29 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
     for source_path, target_path in sorted(symlink_mounts):
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
-    for host_path in (
+    driver_mount_mode = os.getenv("VLLM_HUST_ASCEND_CONTAINER_DRIVER_MOUNT_MODE", "").strip().lower()
+    npu_smi_host_path = "/usr/local/bin/npu-smi" if Path("/usr/local/bin/npu-smi").exists() else "/usr/local/sbin/npu-smi"
+
+    host_paths = [
         "/data",
         "/usr/local/dcmi",
-        "/usr/local/Ascend/driver/tools/hccn_tool",
-        "/usr/local/sbin/npu-smi",
-        "/usr/local/Ascend/driver/lib64",
-        "/usr/local/Ascend/driver/version.info",
+        npu_smi_host_path,
         "/etc/ascend_install.info",
-    ):
+    ]
+    if driver_mount_mode == "full":
+        host_paths.append("/usr/local/Ascend/driver")
+    else:
+        host_paths.extend(
+            [
+                "/usr/local/Ascend/driver/tools/hccn_tool",
+                "/usr/local/Ascend/driver/lib64",
+                "/usr/local/Ascend/driver/version.info",
+            ]
+        )
+    if _truthy_env("VLLM_HUST_ASCEND_MOUNT_HCCN_CONF"):
+        host_paths.append("/etc/hccn.conf")
+
+    for host_path in host_paths:
         if Path(host_path).exists():
             volume_args.extend(["-v", f"{host_path}:{host_path}"])
 

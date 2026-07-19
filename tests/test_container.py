@@ -91,6 +91,84 @@ def test_build_volume_args_includes_workspace_and_cache(tmp_path: Path):
     assert f"{cache_dir}:/root/.cache" in args
 
 
+def test_build_volume_args_defaults_to_narrow_driver_mounts(tmp_path: Path, monkeypatch):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        container_workspace_root="/workspace",
+        host_cache_dir=str(cache_dir),
+    )
+
+    def fake_exists(path: Path) -> bool:
+        return str(path) in {
+            str(workspace_root),
+            str(cache_dir),
+            "/usr/local/Ascend/driver",
+            "/usr/local/Ascend/driver/tools/hccn_tool",
+            "/usr/local/Ascend/driver/lib64",
+            "/usr/local/Ascend/driver/version.info",
+            "/usr/local/bin/npu-smi",
+            "/etc/hccn.conf",
+        }
+
+    with patch(
+        "hust_ascend_manager.container.Path.exists",
+        autospec=True,
+        side_effect=fake_exists,
+    ):
+        args = build_volume_args(config)
+
+    assert "/usr/local/Ascend/driver:/usr/local/Ascend/driver" not in args
+    assert "/etc/hccn.conf:/etc/hccn.conf" not in args
+    assert "/usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool" in args
+    assert "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64" in args
+    assert "/usr/local/bin/npu-smi:/usr/local/bin/npu-smi" in args
+
+
+def test_build_volume_args_can_mount_full_driver_and_hccn_conf(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("VLLM_HUST_ASCEND_CONTAINER_DRIVER_MOUNT_MODE", "full")
+    monkeypatch.setenv("VLLM_HUST_ASCEND_MOUNT_HCCN_CONF", "1")
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        container_workspace_root="/workspace",
+        host_cache_dir=str(cache_dir),
+    )
+
+    def fake_exists(path: Path) -> bool:
+        return str(path) in {
+            str(workspace_root),
+            str(cache_dir),
+            "/usr/local/Ascend/driver",
+            "/usr/local/Ascend/driver/tools/hccn_tool",
+            "/usr/local/Ascend/driver/lib64",
+            "/usr/local/Ascend/driver/version.info",
+            "/usr/local/bin/npu-smi",
+            "/etc/hccn.conf",
+        }
+
+    with patch(
+        "hust_ascend_manager.container.Path.exists",
+        autospec=True,
+        side_effect=fake_exists,
+    ):
+        args = build_volume_args(config)
+
+    assert "/usr/local/Ascend/driver:/usr/local/Ascend/driver" in args
+    assert "/etc/hccn.conf:/etc/hccn.conf" in args
+    assert "/usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool" not in args
+    assert "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64" not in args
+    assert "/usr/local/bin/npu-smi:/usr/local/bin/npu-smi" in args
+
+
 def test_build_volume_args_includes_external_symlink_targets(tmp_path: Path):
     workspace_root = tmp_path / "workspace"
     cache_dir = tmp_path / "cache"
