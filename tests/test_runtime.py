@@ -81,7 +81,20 @@ def test_runtime_env_prefers_manager_exports(tmp_path: Path):
         merged = runtime._runtime_env(tmp_path, "/usr/bin/python3", "/usr/lib")
 
     assert merged["ASCEND_HOME_PATH"] == env["ASCEND_HOME_PATH"]
+    assert merged["TORCH_DEVICE_BACKEND_AUTOLOAD"] == "0"
     assert merged["LD_LIBRARY_PATH"].startswith("/usr/lib:/usr/local/Ascend/cann-9.0.0-beta.1/runtime/lib64")
+
+
+def test_runtime_env_disables_torch_backend_autoload(tmp_path: Path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='vllm-hust'\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("TORCH_DEVICE_BACKEND_AUTOLOAD", "1")
+
+    with patch("hust_ascend_manager.runtime.build_env_dict", return_value={}):
+        merged = runtime._runtime_env(tmp_path, "/usr/bin/python3", None)
+
+    assert merged["TORCH_DEVICE_BACKEND_AUTOLOAD"] == "0"
 
 
 def test_runtime_env_drops_empty_rt_visible_devices(tmp_path: Path, monkeypatch):

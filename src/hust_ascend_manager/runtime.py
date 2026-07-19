@@ -66,6 +66,9 @@ def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> d
         env.update(build_env_dict())
     except Exception:
         pass
+    # torch_npu is imported explicitly by every runtime probe. Disable the
+    # PyTorch 2.10 entry-point autoloader so it cannot import the backend first.
+    env["TORCH_DEVICE_BACKEND_AUTOLOAD"] = "0"
     env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONPATH"] = str(repo_dir) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
     if library_path and not any(marker in library_path for marker in (
@@ -104,6 +107,7 @@ def _runtime_env_summary(repo_dir: Path, python_bin: str, library_path: str | No
         "ASCEND_VISIBLE_DEVICES": env.get("ASCEND_VISIBLE_DEVICES"),
         "ASCEND_RT_VISIBLE_DEVICES": env.get("ASCEND_RT_VISIBLE_DEVICES"),
         "ASCEND_HOME_PATH": env.get("ASCEND_HOME_PATH"),
+        "TORCH_DEVICE_BACKEND_AUTOLOAD": env.get("TORCH_DEVICE_BACKEND_AUTOLOAD"),
         "PYTHONNOUSERSITE": env.get("PYTHONNOUSERSITE"),
         "ld_library_path_count": len(ld_paths),
         "conda_ld_paths": conda_ld_paths,
