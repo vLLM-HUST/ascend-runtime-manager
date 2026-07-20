@@ -8,6 +8,19 @@ import pytest
 from hust_ascend_manager import doctor
 
 
+def test_runtime_stack_recommendations_track_cann_major():
+    assert doctor._runtime_stack_recommendations("8.5.0") == {
+        "target_torch": "2.9.0",
+        "target_torch_npu": "2.9.0",
+        "target_cann": "8.5.0",
+    }
+    assert doctor._runtime_stack_recommendations("9.0.0") == {
+        "target_torch": "2.10.0",
+        "target_torch_npu": "2.10.0",
+        "target_cann": "9.0.0",
+    }
+
+
 def test_find_toolkit_root_prefers_vendor_env(monkeypatch, tmp_path: Path):
     env_root = tmp_path / "cann-8.5.0"
     fallback_root = tmp_path / "ascend-toolkit" / "latest"

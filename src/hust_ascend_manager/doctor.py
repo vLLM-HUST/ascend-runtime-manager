@@ -429,6 +429,21 @@ def _detect_runtime_version(root: str | None) -> str | None:
     return None
 
 
+def _runtime_stack_recommendations(runtime_version: str | None) -> dict[str, str]:
+    major = (runtime_version or "").strip().split(".", 1)[0]
+    if major.isdigit() and int(major) >= 9:
+        return {
+            "target_torch": "2.10.0",
+            "target_torch_npu": "2.10.0",
+            "target_cann": "9.0.0",
+        }
+    return {
+        "target_torch": "2.9.0",
+        "target_torch_npu": "2.9.0",
+        "target_cann": "8.5.0",
+    }
+
+
 def _sanitize_ld_path(old_ld: str) -> str:
     kept: list[str] = []
     for item in old_ld.split(":"):
@@ -760,9 +775,7 @@ def collect_report() -> dict[str, Any]:
             "torch_npu": _pip_version("torch-npu"),
         },
         "recommendations": {
-            "target_torch": "2.9.0",
-            "target_torch_npu": "2.9.0",
-            "target_cann": "8.5.0",
+            **_runtime_stack_recommendations(runtime_version),
             "npugraph_ready": _ascend_has_stream_attr(toolkit),
         },
     }

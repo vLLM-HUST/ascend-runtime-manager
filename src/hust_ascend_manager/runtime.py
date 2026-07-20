@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -55,9 +54,46 @@ def _python_library_path(python_bin: str) -> str | None:
     return None
 
 
-def _expected_torch_version(machine: str | None = None) -> str:
-    host_machine = machine or platform.machine()
-    return "2.9.0" if host_machine == "aarch64" else "2.10.0"
+def _expected_torch_version(
+    machine: str | None = None,
+    cann_version: str | None = None,
+) -> str:
+    del machine
+    resolved_cann_version = cann_version or os.getenv("HUST_ASCEND_RUNTIME_VERSION", "")
+    major = resolved_cann_version.strip().split(".", 1)[0]
+    if major.isdigit() and int(major) >= 9:
+        # CANN 9 uses torch 2.10 on both supported runner architectures.
+        return "2.10.0"
+    # CANN 8 and unknown runtimes retain the conservative manifest default.
+    return "2.9.0"
+
+
+def _is_ascend_library_path(path: str, ascend_home: str | None) -> bool:
+    if not ascend_home:
+        return "/Ascend/" in path
+
+    candidate = Path(path).resolve()
+    home = Path(ascend_home).resolve()
+    if candidate == home or home in candidate.parents:
+        return True
+
+    family_root = home.parent
+    return family_root.name.lower() == "ascend" and family_root in candidate.parents
+
+
+def _insert_conda_library_after_ascend_paths(
+    paths: list[str],
+    library_path: str,
+    ascend_home: str | None,
+) -> list[str]:
+    filtered = [item for item in paths if item != library_path]
+    insert_at = 0
+    while insert_at < len(filtered) and _is_ascend_library_path(
+        filtered[insert_at], ascend_home
+    ):
+        insert_at += 1
+    filtered.insert(insert_at, library_path)
+    return filtered
 
 
 def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, str]:
@@ -66,15 +102,37 @@ def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> d
         env.update(build_env_dict())
     except Exception:
         pass
+    # torch_npu is imported explicitly by every runtime probe. Disable the
+    # PyTorch 2.10 entry-point autoloader so it cannot import the backend first.
+    env["TORCH_DEVICE_BACKEND_AUTOLOAD"] = "0"
     env["PYTHONNOUSERSITE"] = "1"
     env["PYTHONPATH"] = str(repo_dir) + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
-    if library_path and not any(marker in library_path for marker in (
-        "/conda/", "/miniconda", "/anaconda", "/mambaforge", "/miniforge", "/envs/",
-    )):
-        # Only prepend the Python library path if it's NOT a conda env lib
-        # directory.  Conda libs (libstdc++, libgcc_s) shadow CANN driver libs
-        # and cause torch_npu device init to fail silently (device_count=0).
-        env["LD_LIBRARY_PATH"] = library_path + (f":{env['LD_LIBRARY_PATH']}" if env.get("LD_LIBRARY_PATH") else "")
+    if library_path:
+        current_ld_paths = [
+            item for item in env.get("LD_LIBRARY_PATH", "").split(":") if item
+        ]
+        is_conda_library = any(
+            marker in library_path
+            for marker in (
+                "/conda/",
+                "/miniconda",
+                "/anaconda",
+                "/mambaforge",
+                "/miniforge",
+                "/envs/",
+            )
+        )
+        if is_conda_library:
+            # Keep CANN and driver libraries first, then use the selected
+            # Conda C++ runtime before inherited host paths such as /lib64.
+            current_ld_paths = _insert_conda_library_after_ascend_paths(
+                current_ld_paths,
+                library_path,
+                env.get("ASCEND_HOME_PATH"),
+            )
+        elif library_path not in current_ld_paths:
+            current_ld_paths.insert(0, library_path)
+        env["LD_LIBRARY_PATH"] = ":".join(current_ld_paths)
 
     runtime_visible_devices = env.get("ASCEND_RT_VISIBLE_DEVICES")
     if runtime_visible_devices:
@@ -104,6 +162,7 @@ def _runtime_env_summary(repo_dir: Path, python_bin: str, library_path: str | No
         "ASCEND_VISIBLE_DEVICES": env.get("ASCEND_VISIBLE_DEVICES"),
         "ASCEND_RT_VISIBLE_DEVICES": env.get("ASCEND_RT_VISIBLE_DEVICES"),
         "ASCEND_HOME_PATH": env.get("ASCEND_HOME_PATH"),
+        "TORCH_DEVICE_BACKEND_AUTOLOAD": env.get("TORCH_DEVICE_BACKEND_AUTOLOAD"),
         "PYTHONNOUSERSITE": env.get("PYTHONNOUSERSITE"),
         "ld_library_path_count": len(ld_paths),
         "conda_ld_paths": conda_ld_paths,
@@ -309,6 +368,7 @@ def _torch_npu_runtime_probe(
 
 
 def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, Any]:
+    runtime_env = _runtime_env(repo_dir, python_bin, library_path)
     check = _import_check(python_bin, repo_dir, library_path)
     provider_check = _provider_check(
         python_bin,
@@ -323,7 +383,9 @@ def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -
         "python_prefix": str(_python_prefix_from_bin(python_bin)),
         "python_library_path": library_path,
         "runtime_env": _runtime_env_summary(repo_dir, python_bin, library_path),
-        "expected_torch_version": _expected_torch_version(),
+        "expected_torch_version": _expected_torch_version(
+            cann_version=runtime_env.get("HUST_ASCEND_RUNTIME_VERSION")
+        ),
         "packages": {
             "torch": _package_version(python_bin, repo_dir, library_path, "torch"),
             "torch-npu": _package_version(python_bin, repo_dir, library_path, "torch-npu"),
@@ -541,8 +603,11 @@ def repair_vllm_runtime(
         build_env["VLLM_TARGET_DEVICE"] = "empty"
 
     if not skip_torch_install:
+        expected_torch_version = _expected_torch_version(
+            cann_version=env.get("HUST_ASCEND_RUNTIME_VERSION")
+        )
         subprocess.run(
-            [resolved_python, "-m", "pip", "install", "--upgrade", f"torch=={_expected_torch_version()}"] ,
+            [resolved_python, "-m", "pip", "install", "--upgrade", f"torch=={expected_torch_version}"],
             cwd=str(resolved_repo),
             env=env,
             check=True,
