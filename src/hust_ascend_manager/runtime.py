@@ -54,10 +54,46 @@ def _python_library_path(python_bin: str) -> str | None:
     return None
 
 
-def _expected_torch_version(machine: str | None = None) -> str:
-    # The CANN 9.0 runtime matrix uses the same torch stack on both supported
-    # runner architectures.
-    return "2.10.0"
+def _expected_torch_version(
+    machine: str | None = None,
+    cann_version: str | None = None,
+) -> str:
+    del machine
+    resolved_cann_version = cann_version or os.getenv("HUST_ASCEND_RUNTIME_VERSION", "")
+    major = resolved_cann_version.strip().split(".", 1)[0]
+    if major.isdigit() and int(major) >= 9:
+        # CANN 9 uses torch 2.10 on both supported runner architectures.
+        return "2.10.0"
+    # CANN 8 and unknown runtimes retain the conservative manifest default.
+    return "2.9.0"
+
+
+def _is_ascend_library_path(path: str, ascend_home: str | None) -> bool:
+    if not ascend_home:
+        return "/Ascend/" in path
+
+    candidate = Path(path).resolve()
+    home = Path(ascend_home).resolve()
+    if candidate == home or home in candidate.parents:
+        return True
+
+    family_root = home.parent
+    return family_root.name.lower() == "ascend" and family_root in candidate.parents
+
+
+def _insert_conda_library_after_ascend_paths(
+    paths: list[str],
+    library_path: str,
+    ascend_home: str | None,
+) -> list[str]:
+    filtered = [item for item in paths if item != library_path]
+    insert_at = 0
+    while insert_at < len(filtered) and _is_ascend_library_path(
+        filtered[insert_at], ascend_home
+    ):
+        insert_at += 1
+    filtered.insert(insert_at, library_path)
+    return filtered
 
 
 def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, str]:
@@ -75,27 +111,28 @@ def _runtime_env(repo_dir: Path, python_bin: str, library_path: str | None) -> d
         current_ld_paths = [
             item for item in env.get("LD_LIBRARY_PATH", "").split(":") if item
         ]
-        if library_path not in current_ld_paths:
-            is_conda_library = any(
-                marker in library_path
-                for marker in (
-                    "/conda/",
-                    "/miniconda",
-                    "/anaconda",
-                    "/mambaforge",
-                    "/miniforge",
-                    "/envs/",
-                )
+        is_conda_library = any(
+            marker in library_path
+            for marker in (
+                "/conda/",
+                "/miniconda",
+                "/anaconda",
+                "/mambaforge",
+                "/miniforge",
+                "/envs/",
             )
-            if is_conda_library:
-                # Keep CANN and driver libraries first, but make the selected
-                # Conda Python's C++ runtime available before system defaults.
-                # Newer Conda ICU builds require CXXABI symbols absent from the
-                # host libstdc++, while putting Conda first breaks NPU discovery.
-                current_ld_paths.append(library_path)
-            else:
-                current_ld_paths.insert(0, library_path)
-            env["LD_LIBRARY_PATH"] = ":".join(current_ld_paths)
+        )
+        if is_conda_library:
+            # Keep CANN and driver libraries first, then use the selected
+            # Conda C++ runtime before inherited host paths such as /lib64.
+            current_ld_paths = _insert_conda_library_after_ascend_paths(
+                current_ld_paths,
+                library_path,
+                env.get("ASCEND_HOME_PATH"),
+            )
+        elif library_path not in current_ld_paths:
+            current_ld_paths.insert(0, library_path)
+        env["LD_LIBRARY_PATH"] = ":".join(current_ld_paths)
 
     runtime_visible_devices = env.get("ASCEND_RT_VISIBLE_DEVICES")
     if runtime_visible_devices:
@@ -331,6 +368,7 @@ def _torch_npu_runtime_probe(
 
 
 def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -> dict[str, Any]:
+    runtime_env = _runtime_env(repo_dir, python_bin, library_path)
     check = _import_check(python_bin, repo_dir, library_path)
     provider_check = _provider_check(
         python_bin,
@@ -345,7 +383,9 @@ def _runtime_report(repo_dir: Path, python_bin: str, library_path: str | None) -
         "python_prefix": str(_python_prefix_from_bin(python_bin)),
         "python_library_path": library_path,
         "runtime_env": _runtime_env_summary(repo_dir, python_bin, library_path),
-        "expected_torch_version": _expected_torch_version(),
+        "expected_torch_version": _expected_torch_version(
+            cann_version=runtime_env.get("HUST_ASCEND_RUNTIME_VERSION")
+        ),
         "packages": {
             "torch": _package_version(python_bin, repo_dir, library_path, "torch"),
             "torch-npu": _package_version(python_bin, repo_dir, library_path, "torch-npu"),
@@ -563,8 +603,11 @@ def repair_vllm_runtime(
         build_env["VLLM_TARGET_DEVICE"] = "empty"
 
     if not skip_torch_install:
+        expected_torch_version = _expected_torch_version(
+            cann_version=env.get("HUST_ASCEND_RUNTIME_VERSION")
+        )
         subprocess.run(
-            [resolved_python, "-m", "pip", "install", "--upgrade", f"torch=={_expected_torch_version()}"] ,
+            [resolved_python, "-m", "pip", "install", "--upgrade", f"torch=={expected_torch_version}"],
             cwd=str(resolved_repo),
             env=env,
             check=True,
