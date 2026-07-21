@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import Mock
 from unittest.mock import patch
 
+import pytest
+
 from hust_ascend_manager.container import DEFAULT_IMAGE
 from hust_ascend_manager.container import ContainerConfig
 from hust_ascend_manager.container import MIN_DOCKER_PULL_FREE_SPACE_BYTES
@@ -20,6 +22,7 @@ from hust_ascend_manager.container import desired_container_cmd
 from hust_ascend_manager.container import discover_device_args
 from hust_ascend_manager.container import enable_container_ssh
 from hust_ascend_manager.container import ensure_image_present
+from hust_ascend_manager.container import explicit_device_security_args
 from hust_ascend_manager.container import install_container
 from hust_ascend_manager.container import parse_ssh_enable_options
 from hust_ascend_manager.container import resolve_container_image
@@ -263,6 +266,48 @@ def test_install_container_creates_container_when_missing(tmp_path: Path):
     assert "demo" in docker_args
     assert "image:latest" in docker_args
     assert docker_args[-3:] == ["bash", "-lc", "bash /workspace/demo/scripts/ascend-container-runtime.sh"]
+
+
+def test_explicit_device_security_profile_is_nonprivileged_and_exact(monkeypatch):
+    monkeypatch.setenv(
+        "HUST_ASCEND_MANAGER_CONTAINER_SECURITY_PROFILE",
+        "explicit-devices-nonprivileged-v1",
+    )
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_VISIBLE_DEVICES", "3")
+    devices = [
+        "--device", "/dev/davinci3",
+        "--device", "/dev/davinci_manager",
+        "--device", "/dev/devmm_svm",
+        "--device", "/dev/hisi_hdc",
+    ]
+
+    assert explicit_device_security_args(devices) == [
+        "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
+    ]
+
+
+@pytest.mark.parametrize(
+    "extra_path",
+    ["/dev/davinci2", "/dev/davinci", "/dev", "/dev/davinci_unknown"],
+)
+def test_explicit_device_security_profile_rejects_extra_or_unknown_devices(
+    monkeypatch, extra_path,
+):
+    monkeypatch.setenv(
+        "HUST_ASCEND_MANAGER_CONTAINER_SECURITY_PROFILE",
+        "explicit-devices-nonprivileged-v1",
+    )
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_VISIBLE_DEVICES", "3")
+    devices = [
+        "--device", "/dev/davinci3",
+        "--device", "/dev/davinci_manager",
+        "--device", "/dev/devmm_svm",
+        "--device", "/dev/hisi_hdc",
+        "--device", extra_path,
+    ]
+
+    with pytest.raises(ValueError, match="exact ordered device set"):
+        explicit_device_security_args(devices)
 
 
 def test_ensure_image_present_fails_fast_when_docker_storage_is_low(tmp_path: Path, capsys):

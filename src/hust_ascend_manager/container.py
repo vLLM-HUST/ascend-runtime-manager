@@ -26,6 +26,12 @@ STATUS_TABLE_FORMAT = "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 IDLE_COMMAND = "trap : TERM INT; sleep infinity & wait"
 MIN_DOCKER_PULL_FREE_SPACE_BYTES = 8 * 1024 * 1024 * 1024
 DEFAULT_HOST_MODEL_ROOTS = ("/data/shared_models",)
+EXPLICIT_DEVICE_SECURITY_PROFILE = "explicit-devices-nonprivileged-v1"
+ASCEND_COMMON_DEVICE_PATHS = (
+    "/dev/davinci_manager",
+    "/dev/devmm_svm",
+    "/dev/hisi_hdc",
+)
 
 _OFFICIAL_IMAGE_SUFFIXES = {
     ("910b", "ubuntu"): "",
@@ -376,6 +382,35 @@ def discover_device_args() -> list[str]:
     return device_args
 
 
+def explicit_device_security_args(device_args: list[str]) -> list[str]:
+    """Validate the opt-in exact-device profile and return its Docker flags.
+
+    The default manager behavior is retained for other projects.  KV-Delta opts
+    into this profile so the device allowlist, rather than Docker privileged
+    mode, is the complete hardware-access boundary.
+    """
+    profile = os.getenv("HUST_ASCEND_MANAGER_CONTAINER_SECURITY_PROFILE", "").strip()
+    if profile != EXPLICIT_DEVICE_SECURITY_PROFILE:
+        return ["--privileged"]
+
+    selected = _selected_davinci_devices()
+    if not selected:
+        raise ValueError("explicit-device security profile requires selected physical devices")
+    expected = [f"/dev/davinci{device_id}" for device_id in selected]
+    expected.extend(ASCEND_COMMON_DEVICE_PATHS)
+    if len(device_args) % 2 or any(
+        device_args[index] != "--device" for index in range(0, len(device_args), 2)
+    ):
+        raise ValueError("explicit-device security profile received malformed device arguments")
+    observed = [device_args[index] for index in range(1, len(device_args), 2)]
+    if observed != expected:
+        raise ValueError(
+            "explicit-device security profile requires the exact ordered device set "
+            f"{expected}, observed {observed}"
+        )
+    return ["--cap-drop=ALL", "--security-opt=no-new-privileges:true"]
+
+
 def build_volume_args(config: ContainerConfig) -> list[str]:
     volume_args = [
         "-v",
@@ -667,13 +702,17 @@ def install_container(
     device_args = discover_device_args()
     if not device_args:
         return _fail("no Ascend device nodes were found under /dev")
+    try:
+        security_args = explicit_device_security_args(device_args)
+    except ValueError as exc:
+        return _fail(str(exc))
 
     volume_args = build_volume_args(config)
     _log(f"creating container {config.container_name} from {config.image}")
     run_args = [
         "run",
         "-d",
-        "--privileged",
+        *security_args,
         "--name",
         config.container_name,
         "--shm-size",
