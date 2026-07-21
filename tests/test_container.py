@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections import namedtuple
+import json
 from pathlib import Path
 from unittest.mock import Mock
 from unittest.mock import patch
+import subprocess
+import sys
 
 import pytest
 
@@ -268,12 +271,26 @@ def test_install_container_creates_container_when_missing(tmp_path: Path):
     assert docker_args[-3:] == ["bash", "-lc", "bash /workspace/demo/scripts/ascend-container-runtime.sh"]
 
 
-def test_explicit_device_security_profile_is_nonprivileged_and_exact(monkeypatch):
+def _set_exact_manager_provenance(monkeypatch, tmp_path):
+    module_root = Path(__file__).resolve().parents[1] / "src"
+    commit = subprocess.check_output(
+        ["git", "-C", str(module_root.parent), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    receipt = tmp_path / "manager-provenance.json"
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_MODULE_ROOT", str(module_root))
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_COMMIT", commit)
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_PYTHON", sys.executable)
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_PROVENANCE_RECEIPT", str(receipt))
+    return commit, receipt
+
+
+def test_explicit_device_security_profile_is_nonprivileged_and_exact(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "HUST_ASCEND_MANAGER_CONTAINER_SECURITY_PROFILE",
         "explicit-devices-nonprivileged-v1",
     )
     monkeypatch.setenv("HUST_ASCEND_MANAGER_VISIBLE_DEVICES", "3")
+    commit, receipt = _set_exact_manager_provenance(monkeypatch, tmp_path)
     devices = [
         "--device", "/dev/davinci3",
         "--device", "/dev/davinci_manager",
@@ -281,9 +298,15 @@ def test_explicit_device_security_profile_is_nonprivileged_and_exact(monkeypatch
         "--device", "/dev/hisi_hdc",
     ]
 
-    assert explicit_device_security_args(devices) == [
-        "--cap-drop=ALL", "--security-opt=no-new-privileges:true",
-    ]
+    args = explicit_device_security_args(devices)
+    assert args[:2] == ["--cap-drop=ALL", "--security-opt=no-new-privileges:true"]
+    assert f"io.vllm-hust.ascend-manager.commit={commit}" in args
+    proof = json.loads(receipt.read_text())
+    assert proof["module_file"] == str(
+        (Path(__file__).resolve().parents[1] / "src/hust_ascend_manager/container.py").resolve()
+    )
+    assert proof["git_commit"] == commit
+    assert proof["python_executable"] == str(Path(sys.executable).resolve())
 
 
 @pytest.mark.parametrize(
@@ -307,6 +330,32 @@ def test_explicit_device_security_profile_rejects_extra_or_unknown_devices(
     ]
 
     with pytest.raises(ValueError, match="exact ordered device set"):
+        explicit_device_security_args(devices)
+
+
+def test_explicit_device_security_profile_rejects_module_interpreter_or_commit_drift(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setenv(
+        "HUST_ASCEND_MANAGER_CONTAINER_SECURITY_PROFILE",
+        "explicit-devices-nonprivileged-v1",
+    )
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_VISIBLE_DEVICES", "3")
+    devices = [
+        "--device", "/dev/davinci3", "--device", "/dev/davinci_manager",
+        "--device", "/dev/devmm_svm", "--device", "/dev/hisi_hdc",
+    ]
+    commit, _ = _set_exact_manager_provenance(monkeypatch, tmp_path)
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_COMMIT", "0" * 40)
+    with pytest.raises(ValueError, match="commit drift"):
+        explicit_device_security_args(devices)
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_COMMIT", commit)
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_PYTHON", "/external/python")
+    with pytest.raises(ValueError, match="interpreter drift"):
+        explicit_device_security_args(devices)
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_PYTHON", sys.executable)
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_EXPECTED_MODULE_ROOT", str(tmp_path / "external"))
+    with pytest.raises(ValueError, match="module provenance drift"):
         explicit_device_security_args(devices)
 
 

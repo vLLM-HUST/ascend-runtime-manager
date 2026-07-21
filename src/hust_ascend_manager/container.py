@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shlex
@@ -361,22 +362,31 @@ def _selected_davinci_devices() -> list[str] | None:
 def discover_device_args() -> list[str]:
     device_args: list[str] = []
     selected_devices = _selected_davinci_devices()
+    discovery_root_text = os.getenv("HUST_ASCEND_MANAGER_DEVICE_DISCOVERY_ROOT", "").strip()
+    discovery_root = Path(discovery_root_text).resolve() if discovery_root_text else Path("/dev")
+
+    def exists(logical_path: str) -> bool:
+        if discovery_root == Path("/dev"):
+            return Path(logical_path).exists()
+        return (discovery_root / Path(logical_path).name).exists()
+
     if selected_devices is None:
-        device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+        device_paths = sorted(discovery_root.glob("davinci[0-9]*"))
         for device_path in device_paths:
-            device_args.extend(["--device", str(device_path)])
+            logical_path = f"/dev/{device_path.name}" if discovery_root_text else str(device_path)
+            device_args.extend(["--device", logical_path])
     else:
         for physical_id in selected_devices:
-            device_path = Path(f"/dev/davinci{physical_id}")
-            if device_path.exists():
-                device_args.extend(["--device", str(device_path)])
+            device_path = f"/dev/davinci{physical_id}"
+            if exists(device_path):
+                device_args.extend(["--device", device_path])
 
     for extra_path in (
         Path("/dev/davinci_manager"),
         Path("/dev/devmm_svm"),
         Path("/dev/hisi_hdc"),
     ):
-        if extra_path.exists():
+        if exists(str(extra_path)):
             device_args.extend(["--device", str(extra_path)])
 
     return device_args
@@ -408,7 +418,63 @@ def explicit_device_security_args(device_args: list[str]) -> list[str]:
             "explicit-device security profile requires the exact ordered device set "
             f"{expected}, observed {observed}"
         )
-    return ["--cap-drop=ALL", "--security-opt=no-new-privileges:true"]
+    provenance = _validated_manager_provenance()
+    return [
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges:true",
+        "--label", f"io.vllm-hust.ascend-manager.commit={provenance['git_commit']}",
+        "--label", f"io.vllm-hust.ascend-manager.module-file={provenance['module_file']}",
+        "--label", f"io.vllm-hust.ascend-manager.python={provenance['python_executable']}",
+    ]
+
+
+def _validated_manager_provenance() -> dict[str, str]:
+    root_text = os.getenv("HUST_ASCEND_MANAGER_EXPECTED_MODULE_ROOT", "").strip()
+    commit = os.getenv("HUST_ASCEND_MANAGER_EXPECTED_COMMIT", "").strip()
+    python_text = os.getenv("HUST_ASCEND_MANAGER_EXPECTED_PYTHON", "").strip()
+    if not root_text or not re.fullmatch(r"[0-9a-f]{40}", commit) or not python_text:
+        raise ValueError("explicit-device profile requires exact manager root, commit, and Python")
+
+    root = Path(root_text).resolve()
+    module_file = Path(__file__).resolve()
+    expected_module = root / "hust_ascend_manager/container.py"
+    if module_file != expected_module:
+        raise ValueError(
+            f"ascend-runtime-manager module provenance drift: {module_file} != {expected_module}"
+        )
+    expected_python = Path(python_text).resolve()
+    actual_python = Path(sys.executable).resolve()
+    if actual_python != expected_python:
+        raise ValueError(
+            f"ascend-runtime-manager interpreter drift: {actual_python} != {expected_python}"
+        )
+    completed = subprocess.run(
+        ["git", "-C", str(root.parent), "rev-parse", "HEAD"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    observed_commit = completed.stdout.strip() if completed.returncode == 0 else ""
+    if observed_commit != commit:
+        raise ValueError(
+            f"ascend-runtime-manager commit drift: {observed_commit or 'unavailable'} != {commit}"
+        )
+    payload = {
+        "schema_version": "hust-ascend-manager-provenance.v1",
+        "module_file": str(module_file),
+        "module_sha256": hashlib.sha256(module_file.read_bytes()).hexdigest(),
+        "git_commit": observed_commit,
+        "python_executable": str(actual_python),
+        "pythonpath": os.environ.get("PYTHONPATH", ""),
+        "security_profile": EXPLICIT_DEVICE_SECURITY_PROFILE,
+    }
+    receipt_text = os.getenv("HUST_ASCEND_MANAGER_PROVENANCE_RECEIPT", "").strip()
+    if receipt_text:
+        receipt = Path(receipt_text)
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        temporary = receipt.with_name(f".{receipt.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, receipt)
+    return payload
 
 
 def build_volume_args(config: ContainerConfig) -> list[str]:
