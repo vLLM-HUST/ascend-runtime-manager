@@ -5,6 +5,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -465,6 +466,29 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
     for source_path, target_path in sorted(symlink_mounts):
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
+    authority_dir = os.getenv("VLLM_HUST_SEGMENT_REUSE_AUTHORITY_DIR", "").strip()
+    if authority_dir:
+        authority_path = Path(authority_dir)
+        if (
+            not authority_path.is_absolute()
+            or ":" in authority_dir
+            or authority_path.is_symlink()
+            or not authority_path.is_dir()
+        ):
+            raise ValueError(
+                "VLLM_HUST_SEGMENT_REUSE_AUTHORITY_DIR must be an existing "
+                "absolute non-symlink directory"
+            )
+        authority_stat = authority_path.stat()
+        if authority_stat.st_uid != 0 or stat.S_IMODE(authority_stat.st_mode) & 0o022:
+            raise ValueError(
+                "segment-reuse authority directory must be root-owned and not "
+                "group/world writable"
+            )
+        volume_args.extend(
+            ["-v", f"{authority_path}:/run/segment-reuse-authority:ro"]
+        )
+
     driver_mount_mode = os.getenv("VLLM_HUST_ASCEND_CONTAINER_DRIVER_MOUNT_MODE", "").strip().lower()
     npu_smi_host_path = "/usr/local/bin/npu-smi" if Path("/usr/local/bin/npu-smi").exists() else "/usr/local/sbin/npu-smi"
 
@@ -525,7 +549,8 @@ def container_has_expected_mounts(docker_cmd: list[str], config: ContainerConfig
     for index in range(0, len(volume_args), 2):
         if volume_args[index] != "-v":
             continue
-        source_path, target_path = volume_args[index + 1].split(":", 1)
+        mount_parts = volume_args[index + 1].split(":")
+        source_path, target_path = mount_parts[:2]
         expected_mounts.add((source_path, target_path))
 
     return expected_mounts.issubset(actual_mounts)

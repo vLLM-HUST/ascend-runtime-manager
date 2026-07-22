@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import Mock
 from unittest.mock import patch
 
+import pytest
+
 from hust_ascend_manager.container import DEFAULT_IMAGE
 from hust_ascend_manager.container import ContainerConfig
 from hust_ascend_manager.container import MIN_DOCKER_PULL_FREE_SPACE_BYTES
@@ -168,6 +170,52 @@ def test_build_volume_args_can_mount_full_driver_and_hccn_conf(tmp_path: Path, m
     assert "/usr/local/Ascend/driver/tools/hccn_tool:/usr/local/Ascend/driver/tools/hccn_tool" not in args
     assert "/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64" not in args
     assert "/usr/local/bin/npu-smi:/usr/local/bin/npu-smi" in args
+
+
+def test_build_volume_args_mounts_exact_root_owned_authority_read_only(
+    tmp_path: Path, monkeypatch
+):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    authority_dir = tmp_path / "authority"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    authority_dir.mkdir()
+    monkeypatch.setenv("VLLM_HUST_SEGMENT_REUSE_AUTHORITY_DIR", str(authority_dir))
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        container_workspace_root="/workspace",
+        host_cache_dir=str(cache_dir),
+    )
+    original_stat = Path.stat
+
+    def fake_stat(path: Path, *args, **kwargs):
+        if path == authority_dir:
+            return Mock(st_uid=0, st_mode=0o40500)
+        return original_stat(path, *args, **kwargs)
+
+    with patch("hust_ascend_manager.container.Path.stat", autospec=True, side_effect=fake_stat):
+        args = build_volume_args(config)
+
+    assert f"{authority_dir}:/run/segment-reuse-authority:ro" in args
+
+
+def test_build_volume_args_rejects_user_owned_authority(tmp_path: Path, monkeypatch):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    authority_dir = tmp_path / "authority"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    authority_dir.mkdir()
+    monkeypatch.setenv("VLLM_HUST_SEGMENT_REUSE_AUTHORITY_DIR", str(authority_dir))
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        container_workspace_root="/workspace",
+        host_cache_dir=str(cache_dir),
+    )
+
+    with pytest.raises(ValueError, match="root-owned"):
+        build_volume_args(config)
 
 
 def test_build_volume_args_includes_external_symlink_targets(tmp_path: Path):
