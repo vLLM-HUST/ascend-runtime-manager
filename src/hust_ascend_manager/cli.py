@@ -115,6 +115,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Working directory inside the container after startup",
     )
     p_container.add_argument("--host-cache-dir", default=None, help="Host cache directory to mount to /root/.cache")
+    p_container.add_argument(
+        "--extra-bind-mount",
+        action="append",
+        default=[],
+        metavar="SOURCE:TARGET",
+        help="Add a validated host-directory bind mount; may be repeated",
+    )
     p_container.add_argument("--shm-size", default=None, help="Container shared memory size")
     p_container.add_argument(
         "--non-interactive",
@@ -210,6 +217,7 @@ def main() -> int:
             container_workdir=args.container_workdir or "",
             host_cache_dir=args.host_cache_dir or "",
             shm_size=args.shm_size or DEFAULT_SHM_SIZE,
+            extra_bind_mounts=tuple(args.extra_bind_mount),
         )
         return run_container_action(args.action, config, command=list(unknown_args))
 

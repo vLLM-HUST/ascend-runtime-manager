@@ -63,3 +63,28 @@ def test_runtime_repair_dispatches_plugin_options():
         plugin_repo="/workspace/vllm-ascend-hust",
         plugin_package="vllm-ascend-hust==0.13.0",
     )
+
+
+def test_container_dispatches_explicit_extra_bind_mount():
+    with (
+        patch("hust_ascend_manager.cli.resolve_container_image", return_value="fixture:image"),
+        patch("hust_ascend_manager.cli.run_container_action", return_value=0) as run_mock,
+        patch.object(
+            sys,
+            "argv",
+            [
+                "hust-ascend-manager",
+                "container",
+                "start",
+                "--non-interactive",
+                "--extra-bind-mount",
+                "/tmp/exact-run:/run/kvdelta/exact-run",
+            ],
+        ),
+    ):
+        assert cli.main() == 0
+
+    config = run_mock.call_args.args[1]
+    assert config.extra_bind_mounts == (
+        "/tmp/exact-run:/run/kvdelta/exact-run",
+    )

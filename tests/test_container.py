@@ -25,6 +25,7 @@ from hust_ascend_manager.container import desired_container_cmd
 from hust_ascend_manager.container import discover_device_args
 from hust_ascend_manager.container import enable_container_ssh
 from hust_ascend_manager.container import ensure_image_present
+from hust_ascend_manager.container import ensure_host_paths
 from hust_ascend_manager.container import explicit_device_security_args
 from hust_ascend_manager.container import install_container
 from hust_ascend_manager.container import parse_ssh_enable_options
@@ -94,6 +95,49 @@ def test_build_volume_args_includes_workspace_and_cache(tmp_path: Path):
 
     assert f"{workspace_root}:/workspace" in args
     assert f"{cache_dir}:/root/.cache" in args
+
+
+def test_build_volume_args_includes_validated_exact_run_bind(tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    run_root = tmp_path / "exact-run"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    run_root.mkdir(mode=0o770)
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        host_cache_dir=str(cache_dir),
+        extra_bind_mounts=(f"{run_root}:/run/kvdelta/exact-run",),
+    )
+
+    args = build_volume_args(config)
+
+    assert f"{run_root}:/run/kvdelta/exact-run" in args
+
+
+def test_extra_bind_mount_rejects_symlink_and_device_target(tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    run_root = tmp_path / "exact-run"
+    link = tmp_path / "run-link"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    run_root.mkdir()
+    link.symlink_to(run_root, target_is_directory=True)
+
+    linked = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        host_cache_dir=str(cache_dir),
+        extra_bind_mounts=(f"{link}:/run/kvdelta/exact-run",),
+    )
+    assert ensure_host_paths(linked) == 1
+
+    device = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        host_cache_dir=str(cache_dir),
+        extra_bind_mounts=(f"{run_root}:/dev/davinci3",),
+    )
+    assert ensure_host_paths(device) == 1
 
 
 def test_build_volume_args_includes_external_symlink_targets(tmp_path: Path):

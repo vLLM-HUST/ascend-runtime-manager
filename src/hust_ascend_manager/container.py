@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import posixpath
 import re
 import shlex
 import shutil
@@ -60,6 +61,7 @@ class ContainerConfig:
     container_workdir: str = ""
     host_cache_dir: str = ""
     shm_size: str = DEFAULT_SHM_SIZE
+    extra_bind_mounts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.host_workspace_root:
@@ -344,7 +346,47 @@ def ensure_host_paths(config: ContainerConfig) -> int:
         return _fail(f"host workspace root not found: {config.host_workspace_root}")
 
     Path(config.host_cache_dir).mkdir(parents=True, exist_ok=True)
+    try:
+        _validated_extra_bind_mounts(config)
+    except ValueError as exc:
+        return _fail(str(exc))
     return 0
+
+
+def _validated_extra_bind_mounts(config: ContainerConfig) -> list[tuple[str, str]]:
+    """Validate explicit host-directory binds without broad Docker syntax."""
+
+    mounts: list[tuple[str, str]] = []
+    seen_targets: set[str] = set()
+    reserved_targets = {
+        config.container_workspace_root.rstrip("/") or "/",
+        "/root/.cache",
+    }
+    for spec in config.extra_bind_mounts:
+        if spec.count(":") != 1:
+            raise ValueError("extra bind mount must be an exact SOURCE:TARGET pair")
+        source_text, target = spec.split(":", 1)
+        source = Path(source_text)
+        if not source.is_absolute() or not target.startswith("/"):
+            raise ValueError("extra bind mount source and target must be absolute")
+        if source.is_symlink() or not source.is_dir():
+            raise ValueError(f"extra bind mount source must be a non-symlink directory: {source}")
+        try:
+            resolved_source = source.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"extra bind mount source is unavailable: {source}") from exc
+        if resolved_source != source:
+            raise ValueError(f"extra bind mount source must already be canonical: {source}")
+        normalized_target = posixpath.normpath(target)
+        if normalized_target != target or target in reserved_targets:
+            raise ValueError(f"extra bind mount target is non-canonical or reserved: {target}")
+        if target == "/dev" or target.startswith("/dev/"):
+            raise ValueError("extra bind mount target cannot overlap device nodes")
+        if target in seen_targets:
+            raise ValueError(f"duplicate extra bind mount target: {target}")
+        seen_targets.add(target)
+        mounts.append((str(resolved_source), target))
+    return mounts
 
 
 def _selected_davinci_devices() -> list[str] | None:
@@ -516,6 +558,9 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
             symlink_mounts.add((resolved_str, resolved_str))
 
     for source_path, target_path in sorted(symlink_mounts):
+        volume_args.extend(["-v", f"{source_path}:{target_path}"])
+
+    for source_path, target_path in _validated_extra_bind_mounts(config):
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
     for host_path in DEFAULT_HOST_MODEL_ROOTS:
