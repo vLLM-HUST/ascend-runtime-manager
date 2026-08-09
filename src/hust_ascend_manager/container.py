@@ -341,9 +341,14 @@ def ensure_host_paths(config: ContainerConfig) -> int:
 
 def discover_device_args() -> list[str]:
     device_args: list[str] = []
-    device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
+    visible_devices = os.getenv("ASCEND_RT_VISIBLE_DEVICES") or os.getenv("ASCEND_VISIBLE_DEVICES")
+    if visible_devices:
+        device_paths = [Path(f"/dev/davinci{item.strip()}") for item in visible_devices.split(",") if item.strip()]
+    else:
+        device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
     for device_path in device_paths:
-        device_args.extend(["--device", str(device_path)])
+        if device_path.exists():
+            device_args.extend(["--device", str(device_path)])
 
     for extra_path in (
         Path("/dev/davinci_manager"),
@@ -633,11 +638,15 @@ def install_container(
         return _fail("no Ascend device nodes were found under /dev")
 
     volume_args = build_volume_args(config)
+    privileged_value = os.getenv("VLLM_HUST_CONTAINER_PRIVILEGED", "1").strip().lower()
+    privileged_args = (
+        ["--privileged"] if privileged_value in {"1", "true", "yes", "on"} else []
+    )
     _log(f"creating container {config.container_name} from {config.image}")
     run_args = [
         "run",
         "-d",
-        "--privileged",
+        *privileged_args,
         "--name",
         config.container_name,
         "--shm-size",
