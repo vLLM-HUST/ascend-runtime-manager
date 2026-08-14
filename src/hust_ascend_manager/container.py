@@ -25,6 +25,15 @@ DEFAULT_CONTAINER_SSH_USER = "shuhao"
 STATUS_TABLE_FORMAT = "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 IDLE_COMMAND = "trap : TERM INT; sleep infinity & wait"
 MIN_DOCKER_PULL_FREE_SPACE_BYTES = 8 * 1024 * 1024 * 1024
+STANDARD_ASCEND_HOST_MOUNTS = (
+    "/usr/local/dcmi",
+    "/usr/local/Ascend/driver/tools/hccn_tool",
+    "/usr/local/sbin/npu-smi",
+    "/usr/local/Ascend/driver/lib64",
+    "/usr/local/Ascend/driver/version.info",
+    "/etc/ascend_install.info",
+    "/etc/hccn.conf",
+)
 
 _OFFICIAL_IMAGE_SUFFIXES = {
     ("910b", "ubuntu"): "",
@@ -390,14 +399,7 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
     for source_path, target_path in sorted(symlink_mounts):
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
-    for host_path in (
-        "/usr/local/dcmi",
-        "/usr/local/Ascend/driver/tools/hccn_tool",
-        "/usr/local/sbin/npu-smi",
-        "/usr/local/Ascend/driver/lib64",
-        "/usr/local/Ascend/driver/version.info",
-        "/etc/ascend_install.info",
-    ):
+    for host_path in STANDARD_ASCEND_HOST_MOUNTS:
         if Path(host_path).exists():
             volume_args.extend(["-v", f"{host_path}:{host_path}"])
 

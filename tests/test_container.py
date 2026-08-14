@@ -8,6 +8,7 @@ from unittest.mock import patch
 from hust_ascend_manager.container import DEFAULT_IMAGE
 from hust_ascend_manager.container import ContainerConfig
 from hust_ascend_manager.container import MIN_DOCKER_PULL_FREE_SPACE_BYTES
+from hust_ascend_manager.container import STANDARD_ASCEND_HOST_MOUNTS
 from hust_ascend_manager.container import build_official_image
 from hust_ascend_manager.container import build_container_ssh_setup_command
 from hust_ascend_manager.container import build_volume_args
@@ -88,6 +89,10 @@ def test_build_volume_args_includes_workspace_and_cache(tmp_path: Path):
 
     assert f"{workspace_root}:/workspace" in args
     assert f"{cache_dir}:/root/.cache" in args
+
+
+def test_standard_mounts_include_hccl_topology_configuration():
+    assert "/etc/hccn.conf" in STANDARD_ASCEND_HOST_MOUNTS
 
 
 def test_build_volume_args_includes_external_symlink_targets(tmp_path: Path):
