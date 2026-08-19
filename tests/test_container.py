@@ -31,10 +31,10 @@ DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
 
 
 def test_build_official_image_uses_expected_suffixes():
-    assert build_official_image("910b", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.17.0rc1"
-    assert build_official_image("910b", "openeuler") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-openeuler"
-    assert build_official_image("a3", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3"
-    assert build_official_image("a3", "openeuler") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
+    assert build_official_image("910b", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.23.0"
+    assert build_official_image("910b", "openeuler") == "quay.io/ascend/vllm-ascend:v0.23.0-openeuler"
+    assert build_official_image("a3", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.23.0-a3"
+    assert build_official_image("a3", "openeuler") == "quay.io/ascend/vllm-ascend:v0.23.0-a3-openeuler"
 
 
 def test_resolve_container_image_prefers_explicit_override():
@@ -48,7 +48,7 @@ def test_resolve_container_image_noninteractive_uses_detected_variant():
     ):
         image = resolve_container_image(None, non_interactive=True)
 
-    assert image == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
+    assert image == "quay.io/ascend/vllm-ascend:v0.23.0-a3-openeuler"
 
 
 def test_resolve_container_image_interactively_accepts_detected_defaults():
@@ -60,7 +60,7 @@ def test_resolve_container_image_interactively_accepts_detected_defaults():
     ):
         image = resolve_container_image(None, non_interactive=False)
 
-    assert image == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
+    assert image == "quay.io/ascend/vllm-ascend:v0.23.0-a3-openeuler"
 
 
 def test_resolve_container_image_noninteractive_falls_back_to_default_when_detection_missing():
@@ -93,6 +93,39 @@ def test_build_volume_args_includes_workspace_and_cache(tmp_path: Path):
 
 def test_standard_mounts_include_hccl_topology_configuration():
     assert "/etc/hccn.conf" in STANDARD_ASCEND_HOST_MOUNTS
+
+
+def test_build_volume_args_never_mounts_host_cann_toolkit(tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        host_cache_dir=str(cache_dir),
+    )
+
+    args = build_volume_args(config)
+
+    mounts = [args[index + 1] for index, item in enumerate(args) if item == "-v"]
+    assert not any("/usr/local/Ascend/ascend-toolkit" in mount for mount in mounts)
+    assert not any("/usr/local/Ascend/cann-" in mount for mount in mounts)
+
+
+def test_host_driver_interfaces_are_read_only(monkeypatch, tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    monkeypatch.setattr(Path, "exists", lambda path: str(path) == "/etc/ascend_install.info")
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        host_cache_dir=str(cache_dir),
+    )
+
+    args = build_volume_args(config)
+
+    assert "/etc/ascend_install.info:/etc/ascend_install.info:ro" in args
 
 
 def test_build_volume_args_includes_external_symlink_targets(tmp_path: Path):
