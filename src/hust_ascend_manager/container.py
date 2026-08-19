@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 DEFAULT_IMAGE_REPOSITORY = "quay.io/ascend/vllm-ascend"
-DEFAULT_IMAGE_TAG = "v0.17.0rc1"
+DEFAULT_IMAGE_TAG = "v0.23.0"
 DEFAULT_IMAGE_PROFILE = "910b"
 DEFAULT_IMAGE_OS_FLAVOR = "ubuntu"
 DEFAULT_IMAGE = f"{DEFAULT_IMAGE_REPOSITORY}:{DEFAULT_IMAGE_TAG}"
@@ -401,7 +401,7 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
 
     for host_path in STANDARD_ASCEND_HOST_MOUNTS:
         if Path(host_path).exists():
-            volume_args.extend(["-v", f"{host_path}:{host_path}"])
+            volume_args.extend(["-v", f"{host_path}:{host_path}:ro"])
 
     return volume_args
 
@@ -437,7 +437,7 @@ def container_has_expected_mounts(docker_cmd: list[str], config: ContainerConfig
     for index in range(0, len(volume_args), 2):
         if volume_args[index] != "-v":
             continue
-        source_path, target_path = volume_args[index + 1].split(":", 1)
+        source_path, target_path, *_mode = volume_args[index + 1].split(":")
         expected_mounts.add((source_path, target_path))
 
     return expected_mounts.issubset(actual_mounts)
