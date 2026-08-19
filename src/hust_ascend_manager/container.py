@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 DEFAULT_IMAGE_REPOSITORY = "quay.io/ascend/vllm-ascend"
-DEFAULT_IMAGE_TAG = "v0.17.0rc1"
+DEFAULT_IMAGE_TAG = "v0.23.0"
 DEFAULT_IMAGE_PROFILE = "910b"
 DEFAULT_IMAGE_OS_FLAVOR = "ubuntu"
 DEFAULT_IMAGE = f"{DEFAULT_IMAGE_REPOSITORY}:{DEFAULT_IMAGE_TAG}"
@@ -29,6 +29,7 @@ IDLE_COMMAND = "trap : TERM INT; sleep infinity & wait"
 MIN_DOCKER_PULL_FREE_SPACE_BYTES = 8 * 1024 * 1024 * 1024
 DEFAULT_HOST_MODEL_ROOTS = ("/data/shared_models",)
 EXPLICIT_DEVICE_SECURITY_PROFILE = "explicit-devices-nonprivileged-v1"
+DRIVER_COMPATIBLE_SECURITY_PROFILE = "driver-compatible-visible-devices-v1"
 ASCEND_COMMON_DEVICE_PATHS = (
     "/dev/davinci_manager",
     "/dev/devmm_svm",
@@ -442,7 +443,10 @@ def explicit_device_security_args(device_args: list[str]) -> list[str]:
     mode, is the complete hardware-access boundary.
     """
     profile = os.getenv("HUST_ASCEND_MANAGER_CONTAINER_SECURITY_PROFILE", "").strip()
-    if profile != EXPLICIT_DEVICE_SECURITY_PROFILE:
+    if profile not in {
+        EXPLICIT_DEVICE_SECURITY_PROFILE,
+        DRIVER_COMPATIBLE_SECURITY_PROFILE,
+    }:
         return ["--privileged"]
 
     selected = _selected_davinci_devices()
@@ -461,6 +465,12 @@ def explicit_device_security_args(device_args: list[str]) -> list[str]:
             f"{expected}, observed {observed}"
         )
     provenance = _validated_manager_provenance()
+    if profile == DRIVER_COMPATIBLE_SECURITY_PROFILE:
+        return [
+            "--privileged",
+            "--label", f"io.vllm-hust.ascend-manager.commit={provenance['git_commit']}",
+            "--label", "io.vllm-hust.ascend-manager.device-policy=visible-devices",
+        ]
     return [
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges:true",
@@ -576,7 +586,7 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
         "/etc/ascend_install.info",
     ):
         if Path(host_path).exists():
-            volume_args.extend(["-v", f"{host_path}:{host_path}"])
+            volume_args.extend(["-v", f"{host_path}:{host_path}:ro"])
 
     return volume_args
 
@@ -612,7 +622,7 @@ def container_has_expected_mounts(docker_cmd: list[str], config: ContainerConfig
     for index in range(0, len(volume_args), 2):
         if volume_args[index] != "-v":
             continue
-        source_path, target_path = volume_args[index + 1].split(":", 1)
+        source_path, target_path, *_mode = volume_args[index + 1].split(":")
         expected_mounts.add((source_path, target_path))
 
     return expected_mounts.issubset(actual_mounts)

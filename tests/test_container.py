@@ -37,10 +37,10 @@ DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
 
 
 def test_build_official_image_uses_expected_suffixes():
-    assert build_official_image("910b", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.17.0rc1"
-    assert build_official_image("910b", "openeuler") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-openeuler"
-    assert build_official_image("a3", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3"
-    assert build_official_image("a3", "openeuler") == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
+    assert build_official_image("910b", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.23.0"
+    assert build_official_image("910b", "openeuler") == "quay.io/ascend/vllm-ascend:v0.23.0-openeuler"
+    assert build_official_image("a3", "ubuntu") == "quay.io/ascend/vllm-ascend:v0.23.0-a3"
+    assert build_official_image("a3", "openeuler") == "quay.io/ascend/vllm-ascend:v0.23.0-a3-openeuler"
 
 
 def test_resolve_container_image_prefers_explicit_override():
@@ -54,7 +54,7 @@ def test_resolve_container_image_noninteractive_uses_detected_variant():
     ):
         image = resolve_container_image(None, non_interactive=True)
 
-    assert image == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
+    assert image == "quay.io/ascend/vllm-ascend:v0.23.0-a3-openeuler"
 
 
 def test_resolve_container_image_interactively_accepts_detected_defaults():
@@ -66,7 +66,7 @@ def test_resolve_container_image_interactively_accepts_detected_defaults():
     ):
         image = resolve_container_image(None, non_interactive=False)
 
-    assert image == "quay.io/ascend/vllm-ascend:v0.17.0rc1-a3-openeuler"
+    assert image == "quay.io/ascend/vllm-ascend:v0.23.0-a3-openeuler"
 
 
 def test_resolve_container_image_noninteractive_falls_back_to_default_when_detection_missing():
@@ -95,6 +95,26 @@ def test_build_volume_args_includes_workspace_and_cache(tmp_path: Path):
 
     assert f"{workspace_root}:/workspace" in args
     assert f"{cache_dir}:/root/.cache" in args
+
+
+def test_host_driver_interfaces_are_read_only(monkeypatch, tmp_path: Path):
+    workspace_root = tmp_path / "workspace"
+    cache_dir = tmp_path / "cache"
+    workspace_root.mkdir()
+    cache_dir.mkdir()
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda path: str(path) == "/etc/ascend_install.info",
+    )
+    config = ContainerConfig(
+        host_workspace_root=str(workspace_root),
+        host_cache_dir=str(cache_dir),
+    )
+
+    args = build_volume_args(config)
+
+    assert "/etc/ascend_install.info:/etc/ascend_install.info:ro" in args
 
 
 def test_build_volume_args_includes_validated_exact_run_bind(tmp_path: Path):
@@ -351,6 +371,29 @@ def test_explicit_device_security_profile_is_nonprivileged_and_exact(monkeypatch
     )
     assert proof["git_commit"] == commit
     assert proof["python_executable"] == str(Path(sys.executable).resolve())
+
+
+def test_driver_compatible_profile_is_privileged_but_keeps_exact_request(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setenv(
+        "HUST_ASCEND_MANAGER_CONTAINER_SECURITY_PROFILE",
+        "driver-compatible-visible-devices-v1",
+    )
+    monkeypatch.setenv("HUST_ASCEND_MANAGER_VISIBLE_DEVICES", "4")
+    commit, _receipt = _set_exact_manager_provenance(monkeypatch, tmp_path)
+    devices = [
+        "--device", "/dev/davinci4",
+        "--device", "/dev/davinci_manager",
+        "--device", "/dev/devmm_svm",
+        "--device", "/dev/hisi_hdc",
+    ]
+
+    args = explicit_device_security_args(devices)
+
+    assert args[0] == "--privileged"
+    assert f"io.vllm-hust.ascend-manager.commit={commit}" in args
+    assert "io.vllm-hust.ascend-manager.device-policy=visible-devices" in args
 
 
 @pytest.mark.parametrize(
