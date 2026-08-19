@@ -16,9 +16,17 @@ def test_runtime_stack_recommendations_track_cann_major():
     }
     assert doctor._runtime_stack_recommendations("9.0.0") == {
         "target_torch": "2.10.0",
-        "target_torch_npu": "2.10.0",
+        "target_torch_npu": "2.10.0.post2",
         "target_cann": "9.0.0",
     }
+
+
+def test_missing_hccl_reports_matching_soc_ops_remediation(tmp_path: Path):
+    root = tmp_path / "cann-9.0.0"
+    (root / "runtime/lib64").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="ascend-cann-910b-ops==9.0.0"):
+        doctor.build_env_dict(ascend_root=str(root))
 
 
 def test_find_toolkit_root_prefers_vendor_env(monkeypatch, tmp_path: Path):

@@ -434,7 +434,7 @@ def _runtime_stack_recommendations(runtime_version: str | None) -> dict[str, str
     if major.isdigit() and int(major) >= 9:
         return {
             "target_torch": "2.10.0",
-            "target_torch_npu": "2.10.0",
+            "target_torch_npu": "2.10.0.post2",
             "target_cann": "9.0.0",
         }
     return {
@@ -530,7 +530,12 @@ def build_env_dict(ascend_root: str | None = None) -> dict[str, str]:
 
     hccl_lib = _find_hccl(root)
     if not hccl_lib:
-        raise RuntimeError(f"Cannot locate libhccl.so under or near: {root}")
+        raise RuntimeError(
+            f"Cannot locate libhccl.so under or near: {root}. "
+            "CANN 8.5+ packages HCCL with the matching SoC ops package; "
+            "install the ops package for this device and CANN version "
+            "(for 910B/CANN 9.0: ascend-cann-910b-ops==9.0.0)."
+        )
 
     atb_lib = _find_atb_lib_dir(root=root)
 
