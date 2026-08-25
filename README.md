@@ -123,6 +123,10 @@ For reproducible single-device experiments, pass `--npu-devices <ids>` together
 with `--no-privileged`; this mounts only the requested `/dev/davinci*` nodes plus
 the common Ascend management devices, and the manager recreates an existing
 container if its device policy no longer matches.
+Use `--host-pid-namespace` only for experiments whose custody contract must
+correlate in-container descendants with host-visible accelerator PIDs. The
+requested PID mode is part of the persisted container policy and causes stale
+containers to be recreated instead of silently reused.
 When `--image` is omitted, the manager defaults to the official `v0.23.0` image
 family, probes the host for an A2/910B vs A3 recommendation, and interactively
 confirms the official variant (`v0.23.0`, `-a3`, `-openeuler`, or

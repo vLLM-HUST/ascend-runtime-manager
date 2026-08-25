@@ -132,6 +132,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fail if another running container maps a requested davinci device",
     )
     p_container.add_argument(
+        "--host-pid-namespace",
+        action="store_true",
+        help="Use the host PID namespace for auditable accelerator-process custody",
+    )
+    p_container.add_argument(
         "--non-interactive",
         action="store_true",
         help="Skip image selection prompts and rely on host auto-detection/defaults",
@@ -228,6 +233,7 @@ def main() -> int:
             npu_devices=args.npu_devices or "",
             privileged=not bool(args.no_privileged),
             require_exclusive_npu_devices=bool(args.require_exclusive_npu_devices),
+            host_pid_namespace=bool(args.host_pid_namespace),
         )
         return run_container_action(args.action, config, command=list(unknown_args))
 

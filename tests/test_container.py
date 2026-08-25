@@ -343,11 +343,15 @@ def test_discover_device_mapping_conflicts_excludes_candidate_container():
 
 
 def test_container_runtime_policy_checks_privileged_and_devices():
-    config = ContainerConfig(npu_devices="1", privileged=False)
+    config = ContainerConfig(
+        npu_devices="1",
+        privileged=False,
+        host_pid_namespace=True,
+    )
     inspect_host_config = Mock(
         returncode=0,
         stdout=(
-            '{"Privileged": false, "Devices": ['
+            '{"Privileged": false, "PidMode": "host", "Devices": ['
             '{"PathOnHost": "/dev/davinci1"}, '
             '{"PathOnHost": "/dev/davinci_manager"}, '
             '{"PathOnHost": "/dev/devmm_svm"}, '
@@ -366,6 +370,27 @@ def test_container_runtime_policy_checks_privileged_and_devices():
         assert container_has_expected_runtime_policy(["docker"], config) is True
 
 
+def test_container_runtime_policy_rejects_wrong_pid_namespace():
+    config = ContainerConfig(host_pid_namespace=True)
+    inspect_host_config = Mock(
+        returncode=0,
+        stdout='{"Privileged": true, "PidMode": "", "Devices": []}',
+        stderr="",
+    )
+
+    with (
+        patch(
+            "hust_ascend_manager.container.docker_capture",
+            return_value=inspect_host_config,
+        ),
+        patch(
+            "hust_ascend_manager.container.build_expected_device_paths",
+            return_value=set(),
+        ),
+    ):
+        assert container_has_expected_runtime_policy(["docker"], config) is False
+
+
 def test_install_container_creates_container_when_missing(tmp_path: Path):
     workspace_root = tmp_path / "workspace"
     cache_dir = tmp_path / "cache"
@@ -377,6 +402,7 @@ def test_install_container_creates_container_when_missing(tmp_path: Path):
         host_workspace_root=str(workspace_root),
         container_workdir="/workspace/demo",
         host_cache_dir=str(cache_dir),
+        host_pid_namespace=True,
     )
 
     inspect_missing = Mock(returncode=1, stdout="", stderr="")
@@ -393,6 +419,7 @@ def test_install_container_creates_container_when_missing(tmp_path: Path):
     assert rc == 0
     docker_args = run_mock.call_args.args[1]
     assert docker_args[:2] == ["run", "-d"]
+    assert "--pid=host" in docker_args
     assert "demo" in docker_args
     assert "image:latest" in docker_args
     assert docker_args[-3:] == ["bash", "-lc", "bash /workspace/demo/scripts/ascend-container-runtime.sh"]

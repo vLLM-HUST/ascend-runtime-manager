@@ -64,6 +64,7 @@ class ContainerConfig:
     npu_devices: str = ""
     privileged: bool = True
     require_exclusive_npu_devices: bool = False
+    host_pid_namespace: bool = False
 
     def __post_init__(self) -> None:
         if not self.host_workspace_root:
@@ -543,6 +544,9 @@ def container_has_expected_runtime_policy(docker_cmd: list[str], config: Contain
 
     if bool(host_config.get("Privileged")) != bool(config.privileged):
         return False
+    expected_pid_mode = "host" if config.host_pid_namespace else ""
+    if str(host_config.get("PidMode", "")) != expected_pid_mode:
+        return False
 
     configured_devices = {
         item.get("PathOnHost", "")
@@ -794,6 +798,8 @@ def install_container(
     ]
     if config.privileged:
         run_args.insert(2, "--privileged")
+    if config.host_pid_namespace:
+        run_args.insert(2, "--pid=host")
     return run_docker(docker_cmd, run_args).returncode
 
 
