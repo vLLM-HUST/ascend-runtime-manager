@@ -8,9 +8,14 @@ import pytest
 from hust_ascend_manager import runtime
 
 
-def test_expected_torch_version_tracks_arch():
-    assert runtime._expected_torch_version("x86_64") == "2.10.0"
-    assert runtime._expected_torch_version("aarch64") == "2.9.0"
+def test_expected_torch_version_is_consistent_across_architectures():
+    assert runtime._expected_torch_version("x86_64", "9.0.0") == "2.10.0"
+    assert runtime._expected_torch_version("aarch64", "9.0.0") == "2.10.0"
+
+
+def test_expected_torch_version_tracks_cann_major():
+    assert runtime._expected_torch_version(cann_version="8.5.0") == "2.9.0"
+    assert runtime._expected_torch_version(cann_version="9.0.0") == "2.10.0"
 
 
 def test_resolve_repo_dir_requires_vllm_layout(tmp_path: Path):
@@ -81,7 +86,71 @@ def test_runtime_env_prefers_manager_exports(tmp_path: Path):
         merged = runtime._runtime_env(tmp_path, "/usr/bin/python3", "/usr/lib")
 
     assert merged["ASCEND_HOME_PATH"] == env["ASCEND_HOME_PATH"]
+    assert merged["TORCH_DEVICE_BACKEND_AUTOLOAD"] == "0"
     assert merged["LD_LIBRARY_PATH"].startswith("/usr/lib:/usr/local/Ascend/cann-9.0.0-beta.1/runtime/lib64")
+
+
+def test_runtime_env_disables_torch_backend_autoload(tmp_path: Path, monkeypatch):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='vllm-hust'\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("TORCH_DEVICE_BACKEND_AUTOLOAD", "1")
+
+    with patch("hust_ascend_manager.runtime.build_env_dict", return_value={}):
+        merged = runtime._runtime_env(tmp_path, "/usr/bin/python3", None)
+
+    assert merged["TORCH_DEVICE_BACKEND_AUTOLOAD"] == "0"
+
+
+def test_runtime_env_appends_conda_python_library_after_manager_paths(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='vllm-hust'\n", encoding="utf-8"
+    )
+    manager_library = "/usr/local/Ascend/cann-9.0.0/runtime/lib64"
+    conda_library = "/root/miniconda3/envs/vllm-hust-dev/lib"
+
+    with patch(
+        "hust_ascend_manager.runtime.build_env_dict",
+        return_value={"LD_LIBRARY_PATH": manager_library},
+    ):
+        merged = runtime._runtime_env(
+            tmp_path,
+            "/root/miniconda3/envs/vllm-hust-dev/bin/python",
+            conda_library,
+        )
+
+    assert merged["LD_LIBRARY_PATH"] == f"{manager_library}:{conda_library}"
+
+
+def test_runtime_env_places_conda_library_before_explicit_system_paths(
+    tmp_path: Path,
+):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='vllm-hust'\n", encoding="utf-8"
+    )
+    ascend_home = "/usr/local/Ascend/cann-9.0.0"
+    manager_library = f"{ascend_home}/runtime/lib64"
+    driver_library = "/usr/local/Ascend/driver/lib64"
+    conda_library = "/root/miniconda3/envs/vllm-hust-dev/lib"
+
+    with patch(
+        "hust_ascend_manager.runtime.build_env_dict",
+        return_value={
+            "ASCEND_HOME_PATH": ascend_home,
+            "LD_LIBRARY_PATH": (
+                f"{driver_library}:{manager_library}:/lib64:/usr/lib64"
+            ),
+        },
+    ):
+        merged = runtime._runtime_env(
+            tmp_path,
+            "/root/miniconda3/envs/vllm-hust-dev/bin/python",
+            conda_library,
+        )
+
+    assert merged["LD_LIBRARY_PATH"] == (
+        f"{driver_library}:{manager_library}:{conda_library}:/lib64:/usr/lib64"
+    )
 
 
 def test_runtime_env_drops_empty_rt_visible_devices(tmp_path: Path, monkeypatch):

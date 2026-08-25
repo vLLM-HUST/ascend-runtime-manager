@@ -123,10 +123,13 @@ For reproducible single-device experiments, pass `--npu-devices <ids>` together
 with `--no-privileged`; this mounts only the requested `/dev/davinci*` nodes plus
 the common Ascend management devices, and the manager recreates an existing
 container if its device policy no longer matches.
-When `--image` is omitted, the manager now defaults to the `v0.17.0rc1` image
+When `--image` is omitted, the manager defaults to the official `v0.23.0` image
 family, probes the host for an A2/910B vs A3 recommendation, and interactively
-confirms the official variant (`v0.17.0rc1`, `-a3`, `-openeuler`, or
+confirms the official variant (`v0.23.0`, `-a3`, `-openeuler`, or
 `-a3-openeuler`). Use `--non-interactive` to skip prompts in automation.
+The image supplies CANN Toolkit, kernels/ops, HCCL, Torch-NPU, vLLM, and
+vLLM-Ascend. The manager bind-mounts host device/driver interfaces only; it does
+not mount or require a host CANN Toolkit or host CANN ops installation.
 Use `container shell` to enter that environment later without rebuilding the
 mount list, and `container exec -- ...` to run one-off checks or launches.
 If you want a single-command deployment for direct SSH access into the container,

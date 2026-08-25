@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 DEFAULT_IMAGE_REPOSITORY = "quay.io/ascend/vllm-ascend"
-DEFAULT_IMAGE_TAG = "v0.17.0rc1"
+DEFAULT_IMAGE_TAG = "v0.23.0"
 DEFAULT_IMAGE_PROFILE = "910b"
 DEFAULT_IMAGE_OS_FLAVOR = "ubuntu"
 DEFAULT_IMAGE = f"{DEFAULT_IMAGE_REPOSITORY}:{DEFAULT_IMAGE_TAG}"
@@ -25,6 +25,15 @@ DEFAULT_CONTAINER_SSH_USER = "shuhao"
 STATUS_TABLE_FORMAT = "table {{.Names}}\t{{.Status}}\t{{.Image}}"
 IDLE_COMMAND = "trap : TERM INT; sleep infinity & wait"
 MIN_DOCKER_PULL_FREE_SPACE_BYTES = 8 * 1024 * 1024 * 1024
+STANDARD_ASCEND_HOST_MOUNTS = (
+    "/usr/local/dcmi",
+    "/usr/local/Ascend/driver/tools/hccn_tool",
+    "/usr/local/sbin/npu-smi",
+    "/usr/local/Ascend/driver/lib64",
+    "/usr/local/Ascend/driver/version.info",
+    "/etc/ascend_install.info",
+    "/etc/hccn.conf",
+)
 
 _OFFICIAL_IMAGE_SUFFIXES = {
     ("910b", "ubuntu"): "",
@@ -358,10 +367,20 @@ def discover_device_args(npu_devices: str = "") -> list[str]:
     device_args: list[str] = []
     if npu_devices.strip():
         selected_devices = _parse_npu_devices(npu_devices)
-        device_paths = [Path(f"/dev/davinci{device}") for device in selected_devices]
+    else:
+        visible_devices = os.getenv("ASCEND_RT_VISIBLE_DEVICES") or os.getenv(
+            "ASCEND_VISIBLE_DEVICES"
+        )
+        selected_devices = (
+            _parse_npu_devices(visible_devices) if visible_devices else []
+        )
+
+    if selected_devices:
+        device_paths = [
+            Path(f"/dev/davinci{device}") for device in selected_devices
+        ]
     else:
         device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
-
     for device_path in device_paths:
         if device_path.exists():
             device_args.extend(["--device", str(device_path)])
@@ -465,17 +484,12 @@ def build_volume_args(config: ContainerConfig) -> list[str]:
     for source_path, target_path in sorted(symlink_mounts):
         volume_args.extend(["-v", f"{source_path}:{target_path}"])
 
-    for host_path in (
-        "/data",
-        "/usr/local/dcmi",
-        "/usr/local/Ascend/driver/tools/hccn_tool",
-        "/usr/local/sbin/npu-smi",
-        "/usr/local/Ascend/driver/lib64",
-        "/usr/local/Ascend/driver/version.info",
-        "/etc/ascend_install.info",
-    ):
+    if Path("/data").exists():
+        volume_args.extend(["-v", "/data:/data"])
+
+    for host_path in STANDARD_ASCEND_HOST_MOUNTS:
         if Path(host_path).exists():
-            volume_args.extend(["-v", f"{host_path}:{host_path}"])
+            volume_args.extend(["-v", f"{host_path}:{host_path}:ro"])
 
     return volume_args
 
@@ -511,7 +525,7 @@ def container_has_expected_mounts(docker_cmd: list[str], config: ContainerConfig
     for index in range(0, len(volume_args), 2):
         if volume_args[index] != "-v":
             continue
-        source_path, target_path = volume_args[index + 1].split(":", 1)
+        source_path, target_path, *_mode = volume_args[index + 1].split(":")
         expected_mounts.add((source_path, target_path))
 
     return expected_mounts.issubset(actual_mounts)

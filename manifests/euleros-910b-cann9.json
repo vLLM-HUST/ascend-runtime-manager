@@ -2,7 +2,7 @@
   "profile": "euleros-910b-cann9",
   "python_stack": {
     "torch": "2.10.0",
-    "torch_npu": "2.10.0"
+    "torch_npu": "2.10.0.post2"
   },
   "system_steps": [
     {
