@@ -379,12 +379,14 @@ def discover_device_args(npu_devices: str = "") -> list[str]:
         device_paths = [Path(f"/dev/davinci{device}") for device in selected_devices]
     else:
         device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
-    for logical_index, device_path in enumerate(device_paths):
+    for device_path in device_paths:
         if device_path.exists():
-            device_spec = str(device_path)
-            if selected_devices:
-                device_spec = f"{device_path}:/dev/davinci{logical_index}"
-            device_args.extend(["--device", device_spec])
+            # The Ascend driver uses the davinci node's minor number as the
+            # physical device identity.  Renaming a sparse host node (for
+            # example davinci7 -> davinci0) does not remap that identity and
+            # makes HAL/Triton discovery fail.  Keep the physical index and
+            # let ASCEND_RT_VISIBLE_DEVICES select it explicitly.
+            device_args.extend(["--device", str(device_path)])
 
     for extra_path in (
         Path("/dev/davinci_manager"),

@@ -288,7 +288,7 @@ def test_discover_device_args_can_limit_host_npus(tmp_path: Path):
 
     assert args == [
         "--device",
-        "/dev/davinci1:/dev/davinci0",
+        "/dev/davinci1",
         "--device",
         "/dev/davinci_manager",
         "--device",
@@ -298,7 +298,7 @@ def test_discover_device_args_can_limit_host_npus(tmp_path: Path):
     ]
 
 
-def test_discover_device_args_renumbers_selected_host_npus_contiguously():
+def test_discover_device_args_preserves_selected_host_npu_indices():
     fake_devices = {
         "/dev/davinci3",
         "/dev/davinci7",
@@ -319,9 +319,9 @@ def test_discover_device_args_renumbers_selected_host_npus_contiguously():
 
     assert args[:4] == [
         "--device",
-        "/dev/davinci3:/dev/davinci0",
+        "/dev/davinci3",
         "--device",
-        "/dev/davinci7:/dev/davinci1",
+        "/dev/davinci7",
     ]
 
 
@@ -375,7 +375,7 @@ def test_container_runtime_policy_checks_privileged_and_devices():
         returncode=0,
         stdout=(
             '{"Privileged": false, "Devices": ['
-            '{"PathOnHost": "/dev/davinci1", "PathInContainer": "/dev/davinci0"}, '
+            '{"PathOnHost": "/dev/davinci1", "PathInContainer": "/dev/davinci1"}, '
             '{"PathOnHost": "/dev/davinci_manager", "PathInContainer": "/dev/davinci_manager"}, '
             '{"PathOnHost": "/dev/devmm_svm", "PathInContainer": "/dev/devmm_svm"}, '
             '{"PathOnHost": "/dev/hisi_hdc", "PathInContainer": "/dev/hisi_hdc"}]}'
@@ -389,14 +389,14 @@ def test_container_runtime_policy_checks_privileged_and_devices():
         assert container_has_expected_runtime_policy(["docker"], config) is True
 
 
-def test_container_runtime_policy_rejects_unrenumbered_selected_device():
+def test_container_runtime_policy_rejects_renumbered_selected_device():
     config = ContainerConfig(npu_devices="7", privileged=False)
     inspect_host_config = Mock(
         returncode=0,
         stdout=(
             '{"Privileged": false, "Devices": ['
             '{"PathOnHost": "/dev/davinci7", '
-            '"PathInContainer": "/dev/davinci7"}]}'
+            '"PathInContainer": "/dev/davinci0"}]}'
         ),
         stderr="",
     )
@@ -408,7 +408,7 @@ def test_container_runtime_policy_rejects_unrenumbered_selected_device():
         ),
         patch(
             "hust_ascend_manager.container.discover_device_args",
-            return_value=["--device", "/dev/davinci7:/dev/davinci0"],
+            return_value=["--device", "/dev/davinci7"],
         ),
     ):
         assert container_has_expected_runtime_policy(["docker"], config) is False
