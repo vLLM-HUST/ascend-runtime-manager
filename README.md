@@ -121,7 +121,10 @@ your workspace into `/workspace`, mounts host `/data` when present for local
 model and benchmark assets, and creates or starts a persistent container.
 For reproducible single-device experiments, pass `--npu-devices <ids>` together
 with `--no-privileged`; this mounts only the requested `/dev/davinci*` nodes plus
-the common Ascend management devices, and the manager recreates an existing
+the common Ascend management devices. Selected host devices are renumbered to
+contiguous container-local indices starting at `/dev/davinci0`, so a host
+selection such as `--npu-devices 7` remains a valid one-device Torch-NPU
+runtime. The manager recreates an existing
 container if its device policy no longer matches.
 When `--image` is omitted, the manager defaults to the official `v0.23.0` image
 family, probes the host for an A2/910B vs A3 recommendation, and interactively

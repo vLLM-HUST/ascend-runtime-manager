@@ -376,14 +376,15 @@ def discover_device_args(npu_devices: str = "") -> list[str]:
         )
 
     if selected_devices:
-        device_paths = [
-            Path(f"/dev/davinci{device}") for device in selected_devices
-        ]
+        device_paths = [Path(f"/dev/davinci{device}") for device in selected_devices]
     else:
         device_paths = sorted(Path("/dev").glob("davinci[0-9]*"))
-    for device_path in device_paths:
+    for logical_index, device_path in enumerate(device_paths):
         if device_path.exists():
-            device_args.extend(["--device", str(device_path)])
+            device_spec = str(device_path)
+            if selected_devices:
+                device_spec = f"{device_path}:/dev/davinci{logical_index}"
+            device_args.extend(["--device", device_spec])
 
     for extra_path in (
         Path("/dev/davinci_manager"),
@@ -394,6 +395,19 @@ def discover_device_args(npu_devices: str = "") -> list[str]:
             device_args.extend(["--device", str(extra_path)])
 
     return device_args
+
+
+def _device_host_path(device_spec: str) -> str:
+    """Return the host path from a Docker ``--device`` mapping."""
+    return device_spec.split(":", maxsplit=1)[0]
+
+
+def _device_mapping(device_spec: str) -> tuple[str, str]:
+    """Return the host and container paths from a Docker device spec."""
+    parts = device_spec.split(":", maxsplit=2)
+    host_path = parts[0]
+    container_path = parts[1] if len(parts) > 1 else host_path
+    return host_path, container_path
 
 
 def discover_device_mapping_conflicts(
@@ -449,7 +463,16 @@ def discover_device_mapping_conflicts(
 def build_expected_device_paths(config: ContainerConfig) -> set[str]:
     device_args = discover_device_args(config.npu_devices)
     return {
-        device_args[index + 1]
+        _device_host_path(device_args[index + 1])
+        for index in range(0, len(device_args), 2)
+        if device_args[index] == "--device"
+    }
+
+
+def build_expected_device_mappings(config: ContainerConfig) -> set[tuple[str, str]]:
+    device_args = discover_device_args(config.npu_devices)
+    return {
+        _device_mapping(device_args[index + 1])
         for index in range(0, len(device_args), 2)
         if device_args[index] == "--device"
     }
@@ -545,11 +568,11 @@ def container_has_expected_runtime_policy(docker_cmd: list[str], config: Contain
         return False
 
     configured_devices = {
-        item.get("PathOnHost", "")
+        (item.get("PathOnHost", ""), item.get("PathInContainer", ""))
         for item in host_config.get("Devices", [])
-        if item.get("PathOnHost")
+        if item.get("PathOnHost") and item.get("PathInContainer")
     }
-    return build_expected_device_paths(config).issubset(configured_devices)
+    return build_expected_device_mappings(config).issubset(configured_devices)
 
 
 def container_bootstrap_snippet(config: ContainerConfig) -> str:
@@ -756,7 +779,7 @@ def install_container(
 
     if config.require_exclusive_npu_devices:
         expected_paths = {
-            device_args[index + 1]
+            _device_host_path(device_args[index + 1])
             for index in range(0, len(device_args), 2)
             if device_args[index] == "--device"
         }

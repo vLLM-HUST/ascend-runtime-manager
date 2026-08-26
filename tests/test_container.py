@@ -288,13 +288,40 @@ def test_discover_device_args_can_limit_host_npus(tmp_path: Path):
 
     assert args == [
         "--device",
-        "/dev/davinci1",
+        "/dev/davinci1:/dev/davinci0",
         "--device",
         "/dev/davinci_manager",
         "--device",
         "/dev/devmm_svm",
         "--device",
         "/dev/hisi_hdc",
+    ]
+
+
+def test_discover_device_args_renumbers_selected_host_npus_contiguously():
+    fake_devices = {
+        "/dev/davinci3",
+        "/dev/davinci7",
+        "/dev/davinci_manager",
+        "/dev/devmm_svm",
+        "/dev/hisi_hdc",
+    }
+
+    def fake_exists(path: Path) -> bool:
+        return str(path) in fake_devices
+
+    with patch(
+        "hust_ascend_manager.container.Path.exists",
+        autospec=True,
+        side_effect=fake_exists,
+    ):
+        args = discover_device_args("3,7")
+
+    assert args[:4] == [
+        "--device",
+        "/dev/davinci3:/dev/davinci0",
+        "--device",
+        "/dev/davinci7:/dev/davinci1",
     ]
 
 
@@ -348,22 +375,43 @@ def test_container_runtime_policy_checks_privileged_and_devices():
         returncode=0,
         stdout=(
             '{"Privileged": false, "Devices": ['
-            '{"PathOnHost": "/dev/davinci1"}, '
-            '{"PathOnHost": "/dev/davinci_manager"}, '
-            '{"PathOnHost": "/dev/devmm_svm"}, '
-            '{"PathOnHost": "/dev/hisi_hdc"}]}'
+            '{"PathOnHost": "/dev/davinci1", "PathInContainer": "/dev/davinci0"}, '
+            '{"PathOnHost": "/dev/davinci_manager", "PathInContainer": "/dev/davinci_manager"}, '
+            '{"PathOnHost": "/dev/devmm_svm", "PathInContainer": "/dev/devmm_svm"}, '
+            '{"PathOnHost": "/dev/hisi_hdc", "PathInContainer": "/dev/hisi_hdc"}]}'
         ),
         stderr="",
     )
 
     with (
         patch("hust_ascend_manager.container.docker_capture", return_value=inspect_host_config),
-        patch(
-            "hust_ascend_manager.container.build_expected_device_paths",
-            return_value={"/dev/davinci1", "/dev/davinci_manager", "/dev/devmm_svm", "/dev/hisi_hdc"},
-        ),
     ):
         assert container_has_expected_runtime_policy(["docker"], config) is True
+
+
+def test_container_runtime_policy_rejects_unrenumbered_selected_device():
+    config = ContainerConfig(npu_devices="7", privileged=False)
+    inspect_host_config = Mock(
+        returncode=0,
+        stdout=(
+            '{"Privileged": false, "Devices": ['
+            '{"PathOnHost": "/dev/davinci7", '
+            '"PathInContainer": "/dev/davinci7"}]}'
+        ),
+        stderr="",
+    )
+
+    with (
+        patch(
+            "hust_ascend_manager.container.docker_capture",
+            return_value=inspect_host_config,
+        ),
+        patch(
+            "hust_ascend_manager.container.discover_device_args",
+            return_value=["--device", "/dev/davinci7:/dev/davinci0"],
+        ),
+    ):
+        assert container_has_expected_runtime_policy(["docker"], config) is False
 
 
 def test_install_container_creates_container_when_missing(tmp_path: Path):
@@ -505,6 +553,10 @@ def test_install_container_recreates_legacy_container_when_bootstrap_required(tm
         patch("hust_ascend_manager.container.container_exists", return_value=True),
         patch("hust_ascend_manager.container.ensure_container_image_matches", return_value=0),
         patch("hust_ascend_manager.container.container_has_expected_mounts", return_value=True),
+        patch(
+            "hust_ascend_manager.container.container_has_expected_runtime_policy",
+            return_value=True,
+        ),
         patch("hust_ascend_manager.container.container_has_expected_startup", return_value=False),
         patch("hust_ascend_manager.container.container_running", return_value=True),
         patch("hust_ascend_manager.container.discover_device_args", return_value=["--device", "/dev/davinci0"]),
@@ -533,6 +585,10 @@ def test_install_container_recreates_container_when_mounts_are_stale(tmp_path: P
         patch("hust_ascend_manager.container.container_exists", return_value=True),
         patch("hust_ascend_manager.container.ensure_container_image_matches", return_value=0),
         patch("hust_ascend_manager.container.container_has_expected_mounts", return_value=False),
+        patch(
+            "hust_ascend_manager.container.container_has_expected_runtime_policy",
+            return_value=True,
+        ),
         patch("hust_ascend_manager.container.container_running", return_value=True),
         patch("hust_ascend_manager.container.discover_device_args", return_value=["--device", "/dev/davinci0"]),
         patch("hust_ascend_manager.container.run_docker", return_value=Mock(returncode=0)) as run_mock,
@@ -560,6 +616,10 @@ def test_install_container_preserves_stale_container_for_shell_like_actions(tmp_
         patch("hust_ascend_manager.container.container_exists", return_value=True),
         patch("hust_ascend_manager.container.ensure_container_image_matches", return_value=0),
         patch("hust_ascend_manager.container.container_has_expected_mounts", return_value=False),
+        patch(
+            "hust_ascend_manager.container.container_has_expected_runtime_policy",
+            return_value=True,
+        ),
         patch("hust_ascend_manager.container.container_running", return_value=False),
         patch("hust_ascend_manager.container.run_docker", return_value=Mock(returncode=0)) as run_mock,
     ):
