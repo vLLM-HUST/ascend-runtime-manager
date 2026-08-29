@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "canonical_registry": "https://github.com/vLLM-HUST/vllm-hust-docs/tree/codex/ecosystem-architecture-reorganization/registry",
+  "repository": "https://github.com/vLLM-HUST/ascend-runtime-manager",
+  "repository_role": "operations_tool",
+  "relation_to_runtime": "supports_runtime_delivery",
+  "lifecycle": "incubating",
+  "artifacts": [
+    {
+      "id": "ascend-runtime-manager",
+      "artifact_type": "tool",
+      "system_role": "deployment_operations",
+      "delivery_model": "python_distribution",
+      "execution_planes": ["native", "offline"],
+      "integration_contracts": [],
+      "integration_surfaces": [
+        "Ascend CANN environment discovery",
+        "vllm-hust runtime repair command",
+        "vLLM platform entry-point verification"
+      ]
+    }
+  ],
+  "system_boundaries": {
+    "is": [
+      "a local setup, diagnostics, environment, and repair operations tool",
+      "the source of manager-generated Ascend runtime environment exports"
+    ],
+    "is_not": [
+      "the CANN, torch-npu, or device-driver runtime substrate",
+      "a vLLM platform profile or hardware plugin",
+      "an inference control plane"
+    ]
+  },
+  "validation": ["python -m pytest -q"],
+  "compatibility_document": "README.md"
+}
